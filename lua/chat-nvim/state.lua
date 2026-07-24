@@ -41,7 +41,13 @@ function M.update_chats(chats)
 end
 
 function M.update_messages(chat_id, messages)
-  M.messages[chat_id] = messages or {}
+  local msgs = messages or {}
+  -- API returns newest-first; reverse to chronological (oldest-first) for display
+  local reversed = {}
+  for i = #msgs, 1, -1 do
+    table.insert(reversed, msgs[i])
+  end
+  M.messages[chat_id] = reversed
 end
 
 function M.append_messages(chat_id, new_messages)
