@@ -78,10 +78,22 @@ or on error:
 
 | Method | Params | When |
 |--------|--------|------|
-| `resource_updated` | `{uri: string}` | A subscribed MCP resource changed. Lua should re-fetch if relevant. |
+| `resource_updated` | `{uri, sidecar_received_at, ...data}` | A subscribed MCP resource changed. Sidecar pre-fetches the resource and includes the data inline (see below). |
 | `connected` | `{}` | Sidecar successfully connected to chatmux daemon. |
 | `disconnected` | `{reason: string}` | Connection to daemon lost. |
 | `error` | `{message: string}` | Non-fatal error (e.g. subscription failure). |
+
+#### `resource_updated` payload details
+
+Sidecar pre-fetches the updated resource and transforms it before sending to Lua (no Lua → sidecar round-trip needed).
+
+| URI pattern | Extra fields | Example |
+|------------|-------------|---------|
+| `chat://chats/{id}/messages` | `messages: Message[]`, `msg_timestamp: number` | Latest messages + newest message's timestamp |
+| `chat://chats` | `chats: Chat[]` | Updated chat list |
+| Other | Raw resource data | As returned by MCP |
+
+`sidecar_received_at` (epoch ms) is always present — used for latency instrumentation. `msg_timestamp` is only present for messages resources when messages exist.
 
 ## Sidecar as MCP client
 

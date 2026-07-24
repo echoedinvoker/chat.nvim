@@ -83,6 +83,7 @@ Sidecar subscribes to `chat://chats` and `chat://status` on startup. Dynamically
 3. NEVER render images/stickers — use `[sticker:pkg/id]` or `[image]` text placeholders
 4. NEVER import chatmux internals — sidecar communicates only via MCP over unix socket
 5. NEVER use `vim.loop.now()` for latency measurement — it's a monotonic clock with arbitrary epoch, not comparable with `Date.now()`. Use `vim.loop.gettimeofday()` and convert to epoch ms
+6. NEVER compare JSON `null` fields with `== nil` in Lua — `vim.json.decode` converts JSON `null` to `vim.NIL` (a userdata sentinel), not Lua `nil`. Use `obj.field == nil or obj.field == vim.NIL` or a helper like `is_notification()`
 
 ## Environment
 
