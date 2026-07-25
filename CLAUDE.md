@@ -70,7 +70,7 @@ Request/response with integer `id` correlation. Notifications use `id: null`.
 
 ### Client-side unread tracking
 
-chatmux `list_chats` has no unread field. Plugin tracks `last_read_timestamp[chat_id]` locally, persisted to `~/.local/share/chat-nvim/read-state.json`.
+chatmux `list_chats` has no unread field. Plugin tracks `last_read_timestamp[chat_id]` locally, persisted to `vim.fn.stdpath("data") .. "/chat-nvim/read-state.json"` (i.e. `~/.local/share/nvim/chat-nvim/` on a default Linux setup).
 
 ### Resource subscription
 
