@@ -2,7 +2,7 @@
 // Usage: bun run chatmux-sidecar.ts [chat_id]
 // Output: one JSON line per event to stdout. Logs to stderr.
 
-const SOCKET = "/home/matt/.local/share/chatmux/chatmux.sock";
+const SOCKET = process.env.CHATMUX_SOCKET ?? `${process.env.HOME}/.local/share/chatmux/chatmux.sock`;
 const URL = "http://localhost/mcp";
 
 let sessionId: string | null = null;

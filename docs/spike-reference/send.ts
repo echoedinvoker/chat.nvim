@@ -1,6 +1,6 @@
 // chatmux send_message — one-shot MCP tool call over unix socket
 // Usage: bun run chatmux-send.ts <chat_id> <text>
-const SOCKET = "/home/matt/.local/share/chatmux/chatmux.sock";
+const SOCKET = process.env.CHATMUX_SOCKET ?? `${process.env.HOME}/.local/share/chatmux/chatmux.sock`;
 const URL = "http://localhost/mcp";
 
 async function main() {
