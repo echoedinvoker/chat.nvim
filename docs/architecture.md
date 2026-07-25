@@ -71,9 +71,15 @@ Sender sends via LINE app
   → Sidecar SSE stream receives notification
   → Sidecar fetches updated resource via MCP
   → stdout JSON line: {"id": null, "method": "resource_updated", "params": {"uri": "...", "messages": [...]}}
-  → Lua: on_stdout parses → state.update_messages() → ui.messages.append()
+  → Lua: on_stdout parses → state.append_messages() upserts by id, returning added/changed
+  → changed → ui.messages.render_full(keep_cursor)   (an edit or retraction)
+    added   → ui.messages.append()                   (a genuinely new message)
   → Buffer updated without flicker (cursor save/restore + at_bottom check)
 ```
+
+The same notification carries new messages, edits and retractions — the daemon re-sends a
+changed message under its original id. Which of the two paths runs is decided by
+comparing against the copy already in state, not by the notification itself.
 
 ## Sidecar lifecycle
 

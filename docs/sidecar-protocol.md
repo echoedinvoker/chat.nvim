@@ -71,8 +71,15 @@ or on error:
   text: string          // Message content (stickers: "[sticker:pkg/id]", images: "[image]")
   timestamp: number     // Epoch ms (LINE's createdTime)
   is_self: boolean      // true if sent by the user
+  edited_at: number | null      // Non-null once edited in place; text is the current version
+  retracted_at: number | null   // Non-null once retracted; text is already a placeholder
 }
 ```
+
+`edited_at` / `retracted_at` come from the daemon (chatmux protocol v0.5) and are what
+make a message identifiable as *changed* rather than *new*. A retracted message arrives
+with its text already replaced by the placeholder — the sidecar substitutes it, so Lua
+never has to decide what a retracted message looks like.
 
 ## Notification types (Sidecar → Lua)
 

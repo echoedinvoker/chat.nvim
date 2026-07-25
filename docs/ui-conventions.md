@@ -101,7 +101,34 @@ else
 end
 ```
 
-Dedup: track message IDs in state. On update, only append messages whose `id` is not already in the list.
+Dedup: track message IDs in state. On update, append messages whose `id` is not already
+in the list.
+
+## Messages that change after they arrive
+
+**An id you already hold is not necessarily a message you already have.** The daemon
+re-sends a message under its original id when it is edited or retracted, so treating a
+known id as a duplicate silently discards every such change — this is exactly why edits
+were invisible in the buffer before. `state.append_messages` upserts instead: it compares
+`text`, `edited_at` and `retracted_at` against the stored copy and returns two lists,
+`added` and `changed`.
+
+- `#changed > 0` → `render_full(chat_id, { keep_cursor = true })`, redrawing the buffer
+  in place. A changed line can be anywhere, and there is no id → line-range map to patch.
+- otherwise `#added > 0` → the append path above.
+
+`render_full` normally parks the cursor at the bottom; `keep_cursor` saves and restores
+it so a redraw does not yank a user reading history back down. The restored position is
+the *line number* held before the redraw, not the line the content moved to — acceptable
+because a change rarely alters line counts above the cursor.
+
+Redrawing the whole buffer on every change is deliberate. The messages resource returns
+at most 20 messages, so the redraw is cheap; a streaming bot editing once per second
+means one redraw per second at that size. Raising that limit is what would make a precise
+id → line-range map worth its bookkeeping.
+
+⚠️ JSON `null` decodes to `vim.NIL` in Lua — neither `nil` nor comparable to a number.
+Normalize before comparing, or every `retracted_at` comparison reports a change.
 
 ## Notification strategy
 
@@ -114,6 +141,7 @@ Dedup: track message IDs in state. On update, only append messages whose `id` is
 | Event | Channel | Details |
 |-------|---------|---------|
 | New message in **current** chat | Buffer append | Handled by messages.lua append flow |
+| Edit / retraction in **current** chat | Buffer redraw | `render_full` with the cursor preserved; retracted text renders as italic `_[訊息已收回]_` so it reads as absence rather than as something the sender typed |
 | New message in **other** chat | Chat list update + statusline badge | Update `[●]` marker, increment badge count |
 | Connection status change | Statusline | `[connected]` / `[disconnected]` |
 | Send success/failure | Virtual text extmark | Temporary extmark near composer area, auto-clear after 3s |
