@@ -104,9 +104,9 @@ New messages arrive by push: the sidecar subscribes to the daemon's MCP resource
 updates back to Lua, which appends to the buffer without stealing your cursor. See
 [`docs/architecture.md`](docs/architecture.md) and
 [`docs/sidecar-protocol.md`](docs/sidecar-protocol.md) for this side of the boundary, and chatmux's
-[MCP interface](https://github.com/echoedinvoker/chatmux/blob/master/docs/mcp-interface.md) (the
+[MCP interface](https://github.com/echoedinvoker/chatmux/blob/main/docs/mcp-interface.md) (the
 tools and resources this plugin consumes) or
-[adapter protocol](https://github.com/echoedinvoker/chatmux/blob/master/docs/adapter-protocol.md)
+[adapter protocol](https://github.com/echoedinvoker/chatmux/blob/main/docs/adapter-protocol.md)
 (how platforms plug in on the far side) for the other.
 
 ## Limitations
