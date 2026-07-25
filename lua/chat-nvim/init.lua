@@ -39,23 +39,36 @@ local function handle_resource_updated(params)
 
   local chat_id = uri:match("^chat://chats/([^/]+)/messages")
   if chat_id and params.messages then
-    local added, changed = state.append_messages(chat_id, params.messages)
-    if #changed > 0 then
-      -- A changed message sits somewhere in the middle of the buffer, so appending cannot
-      -- express it — redraw. No mark_read: editing an old message is not the user reading
-      -- anything new.
-      if chat_id == state.current_chat then
+    local added, changed, needs_reorder = state.append_messages(chat_id, params.messages)
+
+    -- Computed outside the branches below on purpose: a push can both add messages and
+    -- change the banner, and folding this into the append branch would leave the banner
+    -- stuck on stale wording. An `unavailable` push carries neither adds nor changes.
+    local new_banner = state.norm(params.banner)
+    local banner_changed = state.banners[chat_id] ~= new_banner
+    if banner_changed then state.banners[chat_id] = new_banner end
+
+    if chat_id == state.current_chat then
+      if #changed > 0 or needs_reorder or banner_changed then
+        -- A changed message sits somewhere in the middle of the buffer, so appending
+        -- cannot express it — redraw.
+        if needs_reorder then state.sort_messages(chat_id) end
         messages_ui.render_full(chat_id, { keep_cursor = true })
-      end
-      chat_list.render()
-    elseif #added > 0 then
-      if chat_id == state.current_chat then
+        -- Only a pure live arrival moves the read watermark: an edit to an old message,
+        -- or history arriving from behind, is not the user reading anything new.
+        if #added > 0 and #changed == 0 and not needs_reorder then
+          state.mark_read(chat_id)
+        end
+      elseif #added > 0 then
         messages_ui.append(chat_id, added)
         state.mark_read(chat_id)
       end
-      chat_list.render()
-      log_latency(params)
     end
+
+    if #changed > 0 or #added > 0 or banner_changed then
+      chat_list.render()
+    end
+    if #added > 0 then log_latency(params) end
     return
   end
 

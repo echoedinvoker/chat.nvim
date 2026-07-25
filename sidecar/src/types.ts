@@ -119,6 +119,11 @@ export interface McpMessageRaw {
   retracted_at?: number | null;
 }
 
+export interface McpHistoryRaw {
+  state: string;
+  reason?: string;
+}
+
 export interface McpSendResult {
   success: boolean;
   message_id?: string;

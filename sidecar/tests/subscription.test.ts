@@ -158,3 +158,89 @@ describe("SubscriptionManager", () => {
     expect(client.readResource).not.toHaveBeenCalled();
   });
 });
+
+describe("resource pushes carry the history banner", () => {
+  function pushOf(uri: string, payload: unknown) {
+    const sseData = `data: ${JSON.stringify({
+      jsonrpc: "2.0",
+      method: "notifications/resources/updated",
+      params: { uri },
+    })}\n\n`;
+
+    return createMockClient({
+      openSseStream: mock(() => {
+        const encoder = new TextEncoder();
+        return Promise.resolve(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(encoder.encode(sseData));
+              controller.close();
+            },
+          })
+        );
+      }),
+      readResource: mock(() => Promise.resolve(payload)),
+    });
+  }
+
+  let notifications: Array<{ method: string; params: Record<string, unknown> }>;
+  let handler: NotificationHandler;
+
+  beforeEach(() => {
+    notifications = [];
+    handler = (method, params) => notifications.push({ method, params });
+  });
+
+  test("an empty chat still gets its banner — the case a message-count guard would drop", async () => {
+    const uri = "chat://chats/line:U1/messages";
+    const client = pushOf(uri, { messages: [], history: { state: "unavailable" } });
+    const mgr = new SubscriptionManager(client, handler);
+    await mgr.subscribeChat("line:U1");
+    await mgr.startSseLoop();
+
+    expect(notifications[0]!.params.messages).toEqual([]);
+    expect(notifications[0]!.params.banner).toBe(
+      "── 歷史不可得：此裝置註冊前的訊息 LINE 不下發 ──",
+    );
+  });
+
+  test("a settled chat pushes a null banner so a stale line gets cleared", async () => {
+    const uri = "chat://chats/line:U2/messages";
+    const client = pushOf(uri, {
+      messages: [
+        {
+          id: "line:m1",
+          chat_id: "line:U2",
+          sender: { id: "line:s1", display_name: "Alice" },
+          timestamp: 1_700_000_000_000,
+          content: { type: "text", text: "hi" },
+        },
+      ],
+      history: { state: "complete" },
+    });
+    const mgr = new SubscriptionManager(client, handler);
+    await mgr.subscribeChat("line:U2");
+    await mgr.startSseLoop();
+
+    expect(notifications[0]!.params.banner).toBeNull();
+    expect(notifications[0]!.params.msg_timestamp).toBe(1_700_000_000_000);
+  });
+
+  test("chat://chats carries no banner", async () => {
+    const client = pushOf("chat://chats", { chats: [] });
+    const mgr = new SubscriptionManager(client, handler);
+    await mgr.subscribeDefaults();
+    await mgr.startSseLoop();
+
+    expect(notifications[0]!.params).not.toHaveProperty("banner");
+  });
+
+  test("chat://status carries no banner", async () => {
+    const client = pushOf("chat://status", { adapters: {} });
+    const mgr = new SubscriptionManager(client, handler);
+    await mgr.subscribeDefaults();
+    await mgr.startSseLoop();
+
+    expect(notifications[0]!.params).not.toHaveProperty("banner");
+  });
+});

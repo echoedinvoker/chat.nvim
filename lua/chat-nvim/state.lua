@@ -5,6 +5,7 @@ M.messages = {}        -- {[chat_id] = Message[]}
 M.connection = "disconnected" -- "connected" | "disconnected"
 M.current_chat = nil   -- chat_id or nil
 M.last_read = {}       -- {[chat_id] = timestamp} client-side unread tracking
+M.banners = {}         -- {[chat_id] = string} history notice shown above the messages
 
 local DATA_DIR = vim.fn.stdpath("data") .. "/chat-nvim"
 local READ_STATE_FILE = DATA_DIR .. "/read-state.json"
@@ -56,6 +57,8 @@ local function norm(v)
   return v
 end
 
+M.norm = norm
+
 --- Has this message changed in a way the buffer must show?
 local function differs(old, new)
   return norm(old.text) ~= norm(new.text)
@@ -73,11 +76,20 @@ function M.append_messages(chat_id, new_messages)
     index[m.id] = i
   end
 
+  local existing = M.messages[chat_id]
+  local newest_before = existing[#existing] and existing[#existing].timestamp
+
   local added = {}
   local changed = {}
+  local needs_reorder = false
   for _, m in ipairs(new_messages) do
     local at = index[m.id]
     if at == nil then
+      -- Backfilled history is "unseen" to the client just like a live message, but it
+      -- belongs above the existing ones. Appending it blindly inverts the timeline.
+      if newest_before and m.timestamp < newest_before then
+        needs_reorder = true
+      end
       table.insert(M.messages[chat_id], m)
       table.insert(added, m)
       index[m.id] = #M.messages[chat_id]
@@ -89,7 +101,29 @@ function M.append_messages(chat_id, new_messages)
     end
   end
 
-  return added, changed
+  return added, changed, needs_reorder
+end
+
+--- Numeric when the platform id is a number, lexicographic otherwise: Telegram ids are
+--- variable-length integers, where "10000" sorts before "9999" as a string.
+local function id_rank(id)
+  local tail = tostring(id):match("[^:]+$") or ""
+  return tonumber(tail), tail
+end
+
+--- table.sort is not stable, and mark_read reads the last element as "the newest" — so
+--- same-millisecond messages need a deterministic tiebreaker or the read watermark drifts.
+function M.sort_messages(chat_id)
+  local msgs = M.messages[chat_id]
+  if not msgs then return end
+
+  table.sort(msgs, function(a, b)
+    if a.timestamp ~= b.timestamp then return a.timestamp < b.timestamp end
+    local an, as = id_rank(a.id)
+    local bn, bs = id_rank(b.id)
+    if an and bn then return an < bn end
+    return as < bs
+  end)
 end
 
 function M.mark_read(chat_id)
@@ -128,6 +162,7 @@ end
 function M.reset()
   M.chats = {}
   M.messages = {}
+  M.banners = {}
   M.connection = "disconnected"
   M.current_chat = nil
 end

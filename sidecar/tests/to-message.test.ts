@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { toMessage } from "../src/mcp-client.ts";
+import { toMessage, historyBanner } from "../src/mcp-client.ts";
 import type { McpMessageRaw } from "../src/types.ts";
 
 function raw(overrides: Partial<McpMessageRaw> = {}): McpMessageRaw {
@@ -61,5 +61,38 @@ describe("toMessage passes change state through to Lua", () => {
     expect(m.text).toBe("[訊息已收回]");
     expect(m.edited_at).toBe(1_700_000_400_000);
     expect(m.retracted_at).toBe(1_700_000_500_000);
+  });
+});
+
+describe("historyBanner turns core's history state into one line of prose", () => {
+  test("unavailable says why nothing is there", () => {
+    expect(historyBanner({ state: "unavailable" })).toBe(
+      "── 歷史不可得：此裝置註冊前的訊息 LINE 不下發 ──",
+    );
+  });
+
+  test("backfilling says a fetch is running", () => {
+    expect(historyBanner({ state: "backfilling" })).toBe("── 正在補抓歷史… ──");
+  });
+
+  test("partial says older messages are still missing", () => {
+    expect(historyBanner({ state: "partial" })).toBe("── 更舊的訊息尚未補抓 ──");
+  });
+
+  test("complete shows nothing — the chat is simply short", () => {
+    expect(historyBanner({ state: "complete" })).toBeNull();
+  });
+
+  test("unknown shows nothing — nothing has been established yet", () => {
+    expect(historyBanner({ state: "unknown" })).toBeNull();
+  });
+
+  test("a missing or null history shows nothing", () => {
+    expect(historyBanner(undefined)).toBeNull();
+    expect(historyBanner(null)).toBeNull();
+  });
+
+  test("an unrecognised state shows nothing rather than a wrong claim", () => {
+    expect(historyBanner({ state: "something_new" } as never)).toBeNull();
   });
 });

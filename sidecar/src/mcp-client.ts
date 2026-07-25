@@ -1,6 +1,7 @@
 import type {
   Chat,
   McpChatRaw,
+  McpHistoryRaw,
   McpMessageRaw,
   McpSendResult,
   McpSearchResultItem,
@@ -55,7 +56,7 @@ export class McpClient {
     limit?: number;
     before?: number;
     after?: number;
-  }): Promise<{ messages: Message[] }> {
+  }): Promise<{ messages: Message[]; banner: string | null }> {
     const raw = await this.callTool("read_messages", {
       chat_id: params.chat_id,
       ...(params.limit !== undefined && { limit: params.limit }),
@@ -68,6 +69,7 @@ export class McpClient {
       messages: (parsed.messages as McpMessageRaw[]).map((m) =>
         toMessage(m, params.chat_id)
       ),
+      banner: historyBanner(parsed.history as McpHistoryRaw | undefined),
     };
   }
 
@@ -218,6 +220,21 @@ export function toChat(raw: McpChatRaw): Chat {
     platform: raw.platform,
     last_message_time: raw.last_message?.timestamp,
   };
+}
+
+/**
+ * Banner wording lives here, not in Lua: the same rule as the sticker and retraction
+ * placeholders — Lua renders what it is given and never decides how state should read.
+ */
+const HISTORY_BANNERS: Record<string, string> = {
+  unavailable: "── 歷史不可得：此裝置註冊前的訊息 LINE 不下發 ──",
+  backfilling: "── 正在補抓歷史… ──",
+  partial: "── 更舊的訊息尚未補抓 ──",
+};
+
+export function historyBanner(history: McpHistoryRaw | null | undefined): string | null {
+  if (!history) return null;
+  return HISTORY_BANNERS[history.state] ?? null;
 }
 
 export function toMessage(raw: McpMessageRaw, chatId: string): Message {

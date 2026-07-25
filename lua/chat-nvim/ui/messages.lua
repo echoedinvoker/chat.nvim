@@ -59,6 +59,12 @@ function M.render_full(chat_id, opts)
   local messages = state.messages[chat_id] or {}
   local lines = format_messages(messages)
 
+  local banner = state.banners[chat_id]
+  if banner then
+    table.insert(lines, 1, "")
+    table.insert(lines, 1, banner)
+  end
+
   vim.bo[bufnr].modifiable = true
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
   vim.bo[bufnr].modifiable = false
@@ -158,6 +164,7 @@ function M.open(chat_id)
     vim.schedule(function()
       if err then return end
       state.update_messages(chat_id, result.messages)
+      state.banners[chat_id] = state.norm(result.banner)
       state.mark_read(chat_id)
       M.render_full(chat_id)
       -- Refresh chat list to update unread markers

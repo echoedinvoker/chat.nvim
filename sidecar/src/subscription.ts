@@ -1,6 +1,6 @@
 import type { McpClient } from "./mcp-client.ts";
-import { toChat, toMessage } from "./mcp-client.ts";
-import type { McpChatRaw, McpMessageRaw } from "./types.ts";
+import { toChat, toMessage, historyBanner } from "./mcp-client.ts";
+import type { McpChatRaw, McpHistoryRaw, McpMessageRaw } from "./types.ts";
 
 export type NotificationHandler = (
   method: string,
@@ -109,8 +109,11 @@ export class SubscriptionManager {
         (max, m) => (m.timestamp > max ? m.timestamp : max),
         0
       );
+      // Not guarded on `latest > 0` like msg_timestamp is: the banner matters most when
+      // the chat is empty, which is exactly when that guard would drop it.
       return {
         messages: transformed,
+        banner: historyBanner(obj.history as McpHistoryRaw | undefined),
         ...(latest > 0 && { msg_timestamp: latest }),
       };
     }
