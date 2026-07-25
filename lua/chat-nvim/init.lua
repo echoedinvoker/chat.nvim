@@ -39,8 +39,16 @@ local function handle_resource_updated(params)
 
   local chat_id = uri:match("^chat://chats/([^/]+)/messages")
   if chat_id and params.messages then
-    local added = state.append_messages(chat_id, params.messages)
-    if #added > 0 then
+    local added, changed = state.append_messages(chat_id, params.messages)
+    if #changed > 0 then
+      -- A changed message sits somewhere in the middle of the buffer, so appending cannot
+      -- express it — redraw. No mark_read: editing an old message is not the user reading
+      -- anything new.
+      if chat_id == state.current_chat then
+        messages_ui.render_full(chat_id, { keep_cursor = true })
+      end
+      chat_list.render()
+    elseif #added > 0 then
       if chat_id == state.current_chat then
         messages_ui.append(chat_id, added)
         state.mark_read(chat_id)

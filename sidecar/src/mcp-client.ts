@@ -221,8 +221,14 @@ export function toChat(raw: McpChatRaw): Chat {
 }
 
 export function toMessage(raw: McpMessageRaw, chatId: string): Message {
+  const retractedAt = raw.retracted_at ?? null;
+
   let text: string;
-  if (raw.content.type === "text") {
+  // Retraction placeholder lives here alongside the sticker/image ones: core clears the
+  // content on retraction, so without this Lua would render an empty line.
+  if (retractedAt != null) {
+    text = "[訊息已收回]";
+  } else if (raw.content.type === "text") {
     text = raw.content.text ?? "";
   } else if (raw.content.type === "sticker") {
     const c = raw.content as any;
@@ -240,5 +246,7 @@ export function toMessage(raw: McpMessageRaw, chatId: string): Message {
     text,
     timestamp: raw.timestamp,
     is_self: false, // daemon doesn't expose this yet; will need to compare sender.id with bot user id
+    edited_at: raw.edited_at ?? null,
+    retracted_at: retractedAt,
   };
 }

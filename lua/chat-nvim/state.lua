@@ -50,26 +50,46 @@ function M.update_messages(chat_id, messages)
   M.messages[chat_id] = reversed
 end
 
+--- JSON null decodes to vim.NIL, which is neither nil nor comparable to a number.
+local function norm(v)
+  if v == nil or v == vim.NIL then return nil end
+  return v
+end
+
+--- Has this message changed in a way the buffer must show?
+local function differs(old, new)
+  return norm(old.text) ~= norm(new.text)
+    or norm(old.edited_at) ~= norm(new.edited_at)
+    or norm(old.retracted_at) ~= norm(new.retracted_at)
+end
+
 function M.append_messages(chat_id, new_messages)
   if not M.messages[chat_id] then
     M.messages[chat_id] = {}
   end
 
-  local existing = {}
-  for _, m in ipairs(M.messages[chat_id]) do
-    existing[m.id] = true
+  local index = {}
+  for i, m in ipairs(M.messages[chat_id]) do
+    index[m.id] = i
   end
 
   local added = {}
+  local changed = {}
   for _, m in ipairs(new_messages) do
-    if not existing[m.id] then
+    local at = index[m.id]
+    if at == nil then
       table.insert(M.messages[chat_id], m)
       table.insert(added, m)
-      existing[m.id] = true
+      index[m.id] = #M.messages[chat_id]
+    elseif differs(M.messages[chat_id][at], m) then
+      -- Edits and retractions arrive as the same id with new content. Skipping known ids
+      -- (the old behaviour) is why core-side changes never reached the buffer.
+      M.messages[chat_id][at] = m
+      table.insert(changed, m)
     end
   end
 
-  return added
+  return added, changed
 end
 
 function M.mark_read(chat_id)

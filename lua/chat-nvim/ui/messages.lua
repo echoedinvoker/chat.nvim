@@ -25,7 +25,10 @@ local function format_messages(messages)
 
     table.insert(lines, "## " .. sender .. "  " .. time)
     local text = msg.text
-    if text == nil or text == vim.NIL then
+    if msg.retracted_at and msg.retracted_at ~= vim.NIL then
+      -- Italic so a withdrawn message reads as absence, not as something the sender typed.
+      text = "_[訊息已收回]_"
+    elseif text == nil or text == vim.NIL then
       if msg.sticker_id and msg.sticker_id ~= vim.NIL then
         text = "[sticker:" .. tostring(msg.sticker_id) .. "]"
       else
@@ -40,8 +43,18 @@ local function format_messages(messages)
   return lines
 end
 
-function M.render_full(chat_id)
+--- opts.keep_cursor: stay where the reader was instead of jumping to the newest message.
+--- Used when a redraw is caused by an edit or retraction somewhere above, which is not a
+--- reason to yank the reader down to the bottom.
+function M.render_full(chat_id, opts)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
+
+  local keep_cursor = opts and opts.keep_cursor
+  local win_valid = winnr and vim.api.nvim_win_is_valid(winnr)
+  local saved = nil
+  if keep_cursor and win_valid then
+    saved = vim.api.nvim_win_get_cursor(winnr)
+  end
 
   local messages = state.messages[chat_id] or {}
   local lines = format_messages(messages)
@@ -50,11 +63,17 @@ function M.render_full(chat_id)
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
   vim.bo[bufnr].modifiable = false
 
-  -- Scroll to bottom on initial load
-  if winnr and vim.api.nvim_win_is_valid(winnr) then
-    local count = vim.api.nvim_buf_line_count(bufnr)
-    vim.api.nvim_win_set_cursor(winnr, { count, 0 })
+  if not win_valid then return end
+
+  if saved then
+    -- A retraction shortens the buffer, so the old line may no longer exist.
+    pcall(vim.api.nvim_win_set_cursor, winnr, saved)
+    return
   end
+
+  -- Scroll to bottom on initial load
+  local count = vim.api.nvim_buf_line_count(bufnr)
+  vim.api.nvim_win_set_cursor(winnr, { count, 0 })
 end
 
 function M.append(chat_id, new_messages)

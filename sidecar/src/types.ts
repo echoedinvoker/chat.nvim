@@ -50,6 +50,10 @@ export interface Message {
   text: string;
   timestamp: number;
   is_self: boolean;
+  /** Non-null once edited in place; Lua compares it to detect a changed message. */
+  edited_at: number | null;
+  /** Non-null once retracted. Text is already replaced with a placeholder. */
+  retracted_at: number | null;
 }
 
 // === MCP tool input params ===
@@ -111,6 +115,8 @@ export interface McpMessageRaw {
     type: string;
     text?: string;
   };
+  edited_at?: number | null;
+  retracted_at?: number | null;
 }
 
 export interface McpSendResult {
