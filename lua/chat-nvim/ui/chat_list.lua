@@ -17,8 +17,11 @@ function M.render()
     table.insert(lines, "  No chats found")
   else
     for i, chat in ipairs(state.chats) do
+      -- An empty string is as unusable as a missing one: Telegram reports blank display
+      -- names for accounts with no title set, and those rendered as bare blank rows the
+      -- user could not tell apart or aim at.
       local name = chat.name
-      if name == nil or name == vim.NIL then
+      if name == nil or name == vim.NIL or name:match("^%s*$") then
         name = chat.id or "unknown"
       end
       local marker = ""
