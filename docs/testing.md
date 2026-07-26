@@ -41,10 +41,25 @@ chatmux v0.1 had 165 passing tests (DC-4), but `send_message` was never tested e
 
 1. Connect sidecar to running chatmux daemon
 2. Call `list_chats` → verify non-empty response
-3. Pick a chat (first one, or a specific test chat)
+3. Address a **fixed** test chat, not `chats[0]`
 4. Call `send_message` with test payload (include timestamp for identification)
 5. Call `read_messages` → verify the sent message appears in results
 6. (Manual verification: check recipient phone received the message)
+
+### The test target is fixed, and overridable
+
+The send test targets `telegram:7869659098` (the author's Telegram Saved Messages), not
+whichever chat sorts first. `chats[0]` is ordered by recency, so it drifts between runs and
+a *real* send — which this test deliberately performs — can land in someone else's
+conversation. Override with `CHATMUX_TEST_CHAT_ID` when running against a different
+account:
+
+```bash
+CHATMUX_TEST_CHAT_ID=line:uXXXX bun test tests/integration.test.ts
+```
+
+If the chat is not in `list_chats`, the test fails with that instruction rather than
+silently sending somewhere else.
 
 ### Running integration tests
 
