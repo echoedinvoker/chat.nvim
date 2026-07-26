@@ -43,7 +43,7 @@ or on error:
 
 | Method | Params | Result | Notes |
 |--------|--------|--------|-------|
-| `list_chats` | `{platform?, query?, limit?, cursor?}` | `{chats: Chat[]}` | Lists all chats. Optional filters. |
+| `list_chats` | `{platform?, query?, limit?, cursor?}` | `{chats, total, truncated, truncation_banner}` | With no filter and no explicit page, reads the unpaginated `chat://chats` resource so empty chats are not cut off (see below). With any of them, uses the paginated `list_chats` tool. |
 | `read_messages` | `{chat_id, limit?, before?, after?}` | `{messages: Message[]}` | Reads messages. `before`/`after` are epoch ms. **Side effect**: sidecar auto-subscribes to this chat's messages resource. |
 | `send_message` | `{chat_id, text}` | `{success: boolean, error?}` | Sends a text message via chatmux daemon. |
 | `search_messages` | `{query, platform?, chat_id?, limit?}` | `{messages: Message[]}` | FTS5 trigram search. |
@@ -97,10 +97,27 @@ Sidecar pre-fetches the updated resource and transforms it before sending to Lua
 | URI pattern | Extra fields | Example |
 |------------|-------------|---------|
 | `chat://chats/{id}/messages` | `messages: Message[]`, `msg_timestamp: number` | Latest messages + newest message's timestamp |
-| `chat://chats` | `chats: Chat[]` | Updated chat list |
+| `chat://chats` | `chats: Chat[]`, `total: number`, `truncated: boolean`, `truncation_banner: string \| null` | Updated chat list, same shape as the `list_chats` result |
 | Other | Raw resource data | As returned by MCP |
 
 `sidecar_received_at` (epoch ms) is always present — used for latency instrumentation. `msg_timestamp` is only present for messages resources when messages exist.
+
+### Why the chat list has two paths
+
+The `list_chats` tool defaults to `limit: 50` and the daemon sorts `last_message_at DESC
+NULLS LAST`, so chats that have never received a message sort last and fall off the end.
+On a real vault that hid every empty chat permanently — including the ones the on-demand
+backfill and the "history unavailable" banner exist to serve.
+
+An unfiltered request therefore reads `chat://chats`, which the subscription path already
+read. Before, opening the list gave 50 chats while any pushed update replaced it with all
+of them; both now go through the same builder and answer the same shape.
+
+`chat://chats` still caps at a hard-coded 1000 on the daemon side, so the payload's `total`
+is compared against what actually arrived. A short list sets `truncated` and carries a
+`truncation_banner` for the UI to show. `truncation_banner` is `null` when nothing was cut
+— Lua must pass it through `state.norm()`, since JSON `null` decodes to `vim.NIL`, which is
+truthy.
 
 ## Sidecar as MCP client
 

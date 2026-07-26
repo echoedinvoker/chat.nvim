@@ -30,6 +30,12 @@ chat.nvim uses three panels, all `buftype=nofile` (scratch buffers, never saved 
 - Unread = `chat.last_message_time > (state.last_read[chat_id] or 0)`
   - `or 0` is required: Lua `number > nil` crashes. First-launch chats have no `last_read` entry.
 - Auto-refreshes when `chat://chats` resource is updated
+- Shows every chat, including ones with no messages — they sort last and used to be cut
+  off by the tool's default limit
+- When the list came back shorter than the daemon's own `total`, a trailing warning line
+  says so (`DiagnosticWarn`). It goes last: truncation happens at the tail, and the top of
+  the list is where the user works. `<CR>` is bounded by `#state.chats`, so landing on that
+  line is a safe no-op
 
 ### Messages (center panel)
 
