@@ -235,6 +235,47 @@ describe("resource pushes carry the history banner", () => {
     expect(notifications[0]!.params).not.toHaveProperty("banner");
   });
 
+  // The push path and the initial load must answer the same shape, or the list silently
+  // changes size depending on which one ran last — the asymmetry F11 was really about.
+  test("chat://chats carries the completeness fields", async () => {
+    const client = pushOf("chat://chats", {
+      chats: [{ id: "line:a", name: "a", platform: "line" }],
+      total: 1,
+    });
+    const mgr = new SubscriptionManager(client, handler);
+    await mgr.subscribeDefaults();
+    await mgr.startSseLoop();
+
+    expect(notifications[0]!.params.total).toBe(1);
+    expect(notifications[0]!.params.truncated).toBe(false);
+    expect(notifications[0]!.params.truncation_banner).toBeNull();
+  });
+
+  test("a truncated chat://chats push says so", async () => {
+    const client = pushOf("chat://chats", {
+      chats: [{ id: "line:a", name: "a", platform: "line" }],
+      total: 143,
+    });
+    const mgr = new SubscriptionManager(client, handler);
+    await mgr.subscribeDefaults();
+    await mgr.startSseLoop();
+
+    expect(notifications[0]!.params.truncated).toBe(true);
+    expect(notifications[0]!.params.truncation_banner).toContain("143");
+  });
+
+  // Dropping the old `Array.isArray(obj.chats)` guard means malformed pushes are
+  // normalised instead of forwarded raw. Pinned so that change stays deliberate.
+  test("a malformed chat://chats push normalises to an empty list", async () => {
+    const client = pushOf("chat://chats", { chats: "not-an-array" });
+    const mgr = new SubscriptionManager(client, handler);
+    await mgr.subscribeDefaults();
+    await mgr.startSseLoop();
+
+    expect(notifications[0]!.params.chats).toEqual([]);
+    expect(notifications[0]!.params.truncated).toBe(false);
+  });
+
   test("chat://status carries no banner", async () => {
     const client = pushOf("chat://status", { adapters: {} });
     const mgr = new SubscriptionManager(client, handler);

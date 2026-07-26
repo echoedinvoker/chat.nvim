@@ -37,8 +37,12 @@ function M.init()
   load_read_state()
 end
 
-function M.update_chats(chats)
+--- `banner` is nil unless the list came back short of the daemon's own total.
+--- Passed through norm(): JSON null decodes to vim.NIL, which is truthy, so storing
+--- it raw would make the warning render on every complete list.
+function M.update_chats(chats, banner)
   M.chats = chats or {}
+  M.chat_list_banner = M.norm(banner)
 end
 
 function M.update_messages(chat_id, messages)

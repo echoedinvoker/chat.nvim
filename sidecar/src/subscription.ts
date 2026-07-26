@@ -1,5 +1,5 @@
 import type { McpClient } from "./mcp-client.ts";
-import { toChat, toMessage, historyBanner } from "./mcp-client.ts";
+import { toChatList, toMessage, historyBanner } from "./mcp-client.ts";
 import type { McpChatRaw, McpHistoryRaw, McpMessageRaw } from "./types.ts";
 
 export type NotificationHandler = (
@@ -118,11 +118,11 @@ export class SubscriptionManager {
       };
     }
 
-    // chat://chats → transform chats array
-    if (uri === "chat://chats" && Array.isArray(obj.chats)) {
-      return {
-        chats: (obj.chats as McpChatRaw[]).map(toChat),
-      };
+    // chat://chats → same builder the initial load uses, so a push and an open answer
+    // the same shape. toChatList defends against a missing/malformed `chats`, so a bad
+    // push normalises to an empty list rather than reaching Lua raw.
+    if (uri === "chat://chats") {
+      return toChatList(obj as { chats?: McpChatRaw[]; total?: number });
     }
 
     return obj;

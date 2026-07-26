@@ -30,6 +30,15 @@ function M.render()
     end
   end
 
+  -- Trailing, because the truncation happens at the tail and the top of the list is
+  -- where the user actually works. <CR> is bounded by #state.chats, so this extra line
+  -- is a safe no-op to land on.
+  local banner = state.chat_list_banner
+  if banner then
+    table.insert(lines, banner)
+    table.insert(hl_ranges, { line = #lines - 1, col = 0, len = #banner, hl = "DiagnosticWarn" })
+  end
+
   vim.bo[bufnr].modifiable = true
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
   vim.bo[bufnr].modifiable = false
@@ -37,7 +46,7 @@ function M.render()
   local ns = vim.api.nvim_create_namespace("chat_nvim_unread")
   vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
   for _, hl in ipairs(hl_ranges) do
-    vim.api.nvim_buf_add_highlight(bufnr, ns, "DiagnosticInfo", hl.line, hl.col, hl.col + hl.len)
+    vim.api.nvim_buf_add_highlight(bufnr, ns, hl.hl or "DiagnosticInfo", hl.line, hl.col, hl.col + hl.len)
   end
 end
 

@@ -73,7 +73,7 @@ local function handle_resource_updated(params)
   end
 
   if uri == "chat://chats" and params.chats then
-    state.update_chats(params.chats)
+    state.update_chats(params.chats, params.truncation_banner)
     chat_list.render()
     return
   end
@@ -177,7 +177,7 @@ function M._chat_list()
         notify.show_error_in_chat_list("list_chats: " .. tostring(err))
         return
       end
-      state.update_chats(result.chats)
+      state.update_chats(result.chats, result.truncation_banner)
       chat_list.render()
     end)
   end)
@@ -250,7 +250,7 @@ function M.refresh_chats()
   sidecar.send("list_chats", {}, function(result, err)
     vim.schedule(function()
       if err then return end
-      state.update_chats(result.chats)
+      state.update_chats(result.chats, result.truncation_banner)
       local chat_list = require("chat-nvim.ui.chat_list")
       chat_list.render()
     end)
