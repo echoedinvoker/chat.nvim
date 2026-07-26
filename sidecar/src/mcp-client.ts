@@ -51,6 +51,12 @@ export class McpClient {
     };
   }
 
+  /** The whole chat list, via the unpaginated resource. See `shouldUseListAll`. */
+  async listAllChats(): Promise<ReturnType<typeof toChatList>> {
+    const parsed = await this.readResource("chat://chats");
+    return toChatList((parsed ?? {}) as { chats?: McpChatRaw[]; total?: number });
+  }
+
   async readMessages(params: {
     chat_id: string;
     limit?: number;
@@ -220,6 +226,52 @@ export function toChat(raw: McpChatRaw): Chat {
     platform: raw.platform,
     last_message_time: raw.last_message?.timestamp,
   };
+}
+
+/**
+ * Builds the chat list payload sent to Lua, from either the `list_chats` tool or the
+ * `chat://chats` resource — both answer the same shape, so both go through here.
+ *
+ * `total` is what the daemon says exists; `chats` is what we were actually handed. When
+ * they disagree the list is truncated, and saying so is the whole point: `chat://chats`
+ * caps at a hard-coded 1000, so silently rendering a short list would just move F11's
+ * lie further out rather than remove it.
+ */
+export function toChatList(obj: {
+  chats?: McpChatRaw[];
+  total?: number;
+}): {
+  chats: Chat[];
+  total: number;
+  truncated: boolean;
+  truncation_banner: string | null;
+} {
+  const chats = (Array.isArray(obj?.chats) ? obj.chats : []).map(toChat);
+  const total = typeof obj?.total === "number" ? obj.total : chats.length;
+  const truncated = chats.length < total;
+
+  return {
+    chats,
+    total,
+    truncated,
+    truncation_banner: truncated
+      ? `── 清單截斷：只顯示 ${chats.length} / ${total} 個聊天室 ──`
+      : null,
+  };
+}
+
+/**
+ * A request carrying no filter and no explicit page is asking for the whole list, which
+ * the tool cannot give: its limit defaults to 50 and chats with no messages sort last,
+ * so they fall off the end permanently. Those requests read the resource instead.
+ */
+export function shouldUseListAll(params: {
+  platform?: string;
+  query?: string;
+  limit?: number;
+  cursor?: number;
+}): boolean {
+  return !params.platform && !params.query && !params.limit && !params.cursor;
 }
 
 /**

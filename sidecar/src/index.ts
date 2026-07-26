@@ -1,6 +1,6 @@
-import { McpClient } from "./mcp-client.ts";
+import { McpClient, shouldUseListAll } from "./mcp-client.ts";
 import { SubscriptionManager } from "./subscription.ts";
-import type { Request, RequestMethod } from "./types.ts";
+import type { ListChatsParams, Request, RequestMethod } from "./types.ts";
 
 function emit(obj: Record<string, unknown>): void {
   console.log(JSON.stringify(obj));
@@ -27,14 +27,18 @@ const METHODS: Set<RequestMethod> = new Set([
   "close_chat",
 ]);
 
-async function dispatch(
+export async function dispatch(
   client: McpClient,
   subMgr: SubscriptionManager,
   req: Request
 ): Promise<unknown> {
   switch (req.method) {
-    case "list_chats":
-      return client.listChats(req.params as any);
+    case "list_chats": {
+      const params = req.params as ListChatsParams;
+      return shouldUseListAll(params)
+        ? client.listAllChats()
+        : client.listChats(params);
+    }
     case "read_messages": {
       const params = req.params as { chat_id: string; limit?: number; before?: number; after?: number };
       await subMgr.subscribeChat(params.chat_id);
@@ -125,7 +129,11 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
-main().catch((err) => {
-  console.error("[sidecar] fatal:", err);
-  process.exit(1);
-});
+// Only run when launched as the sidecar process; importing this module (tests reaching
+// for `dispatch`) must not open a daemon connection or start reading stdin.
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error("[sidecar] fatal:", err);
+    process.exit(1);
+  });
+}
