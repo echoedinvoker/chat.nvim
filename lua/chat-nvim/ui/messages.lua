@@ -28,13 +28,12 @@ local function format_messages(messages)
     if msg.retracted_at and msg.retracted_at ~= vim.NIL then
       -- Italic so a withdrawn message reads as absence, not as something the sender typed.
       text = "_[訊息已收回]_"
-    elseif text == nil or text == vim.NIL then
-      if msg.sticker_id and msg.sticker_id ~= vim.NIL then
-        text = "[sticker:" .. tostring(msg.sticker_id) .. "]"
-      else
-        text = "[image]"
-      end
     end
+    -- There is no `text == nil` branch here on purpose. The sidecar's `toMessage` sets
+    -- `text` on every path, so a second placeholder format lived here only to drift from
+    -- the first one — it read `msg.sticker_id`, a field the sidecar has never produced.
+    -- Verified at runtime, not by reading: 101 probe lines across five chats, zero with
+    -- a null text (Phase 1.2). Placeholders have one origin: sidecar/src/mcp-client.ts.
     for line in (text .. "\n"):gmatch("([^\n]*)\n") do
       table.insert(lines, line)
     end

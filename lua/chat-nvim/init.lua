@@ -215,8 +215,10 @@ function M._chat_search(query)
       for _, msg in ipairs(result.messages) do
         local sender = msg.sender_name or "unknown"
         if sender == vim.NIL then sender = "unknown" end
+        -- Search results come through the same `toMessage` as the message list
+        -- (mcp-client.ts:105), which always sets `text`, so the old `[media]` fallback
+        -- here was a second placeholder vocabulary that could only drift from the first.
         local text_preview = msg.text or ""
-        if text_preview == vim.NIL then text_preview = "[media]" end
         text_preview = text_preview:gsub("\n", " "):sub(1, 80)
         table.insert(items, {
           text = sender .. ": " .. text_preview,
