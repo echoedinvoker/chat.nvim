@@ -113,9 +113,13 @@ tools and resources this plugin consumes) or
 
 ## Limitations
 
-- **Text only.** Images and stickers render as `[image]` / `[sticker:pkg/id]` placeholders. Media
-  rendering is deliberately deferred, not forgotten — a terminal is a poor image viewer, and the
-  placeholder tells you enough to go look at your phone.
+- **Images and stickers render inline; other media does not.** Video, audio and files show as
+  `[video]` / `[audio]` / `[file]` labels. The label tells you enough to go look at your phone,
+  and a terminal is a poor player for any of the three.
+- **Animated stickers show their static frame.** Enough to recognise which sticker it is, which is
+  what the line is for. Reconsider if animated stickers become common in your chats, or if
+  someone establishes how an APNG behaves under image.nvim — that spike, not the URL handling, is
+  the actual first step.
 - **Unread state is client-side.** chatmux has no unread field, so the plugin tracks read
   timestamps locally in `stdpath("data")/chat-nvim/read-state.json`. Read state does not sync with
   your phone.

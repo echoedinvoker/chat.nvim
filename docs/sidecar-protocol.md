@@ -161,22 +161,86 @@ the number in the hint and the number fetched cannot drift apart.
 
 | Method | Params | When |
 |--------|--------|------|
-| `resource_updated` | `{uri, sidecar_received_at, ...data}` | A subscribed MCP resource changed. Sidecar pre-fetches the resource and includes the data inline (see below). |
+| `resource_updated` | `{uri, sidecar_received_at, ...data}` | A subscribed MCP resource changed. Sidecar fetches the data itself and includes it inline (see below). |
 | `connected` | `{}` | Sidecar successfully connected to chatmux daemon. |
 | `disconnected` | `{reason: string}` | Connection to daemon lost. |
 | `error` | `{message: string}` | Non-fatal error (e.g. subscription failure). |
 
 #### `resource_updated` payload details
 
-Sidecar pre-fetches the updated resource and transforms it before sending to Lua (no Lua → sidecar round-trip needed).
+Sidecar fetches the data and transforms it before sending to Lua, so no Lua → sidecar
+round-trip is needed. Where that data comes from depends on the URI: the chat list and
+status are re-read from their resource, while messages come from the event tail (see
+below).
 
 | URI pattern | Extra fields | Example |
 |------------|-------------|---------|
-| `chat://chats/{id}/messages` | `messages: Message[]`, `msg_timestamp: number` | Latest messages + newest message's timestamp |
+| `chat://chats/{id}/messages` | `messages: Message[]`, `msg_timestamp: number` | The messages that changed + the newest one's timestamp. Sourced from the event tail, not the resource — see below. |
 | `chat://chats` | `chats: Chat[]`, `total: number`, `truncated: boolean`, `truncation_banner: string \| null` | Updated chat list, same shape as the `list_chats` result |
 | Other | Raw resource data | As returned by MCP |
 
 `sidecar_received_at` (epoch ms) is always present — used for latency instrumentation. `msg_timestamp` is only present for messages resources when messages exist.
+
+### Why a messages push follows the event tail
+
+A `chat://chats/{id}/messages` push does **not** come from re-reading that resource. It
+comes from `read_events`, core's cursor tail.
+
+The resource answers "what are the newest N messages", and `N` defaults to 20 — it parses
+`limit` and nothing else. The buffer holds 50 on open and grows past 160 as the user pages
+back with `[`. So an edit or a retraction to anything but the most recent handful changed
+in core, notified over SSE, and then never reached the screen, **with nothing to show that
+it had not**. Every fix for edits and retractions was verified against a change that had
+just happened, which is always inside the window, so the hole survived three rounds of
+acceptance.
+
+The tail has no window. A message that is edited or retracted re-enters the sequence at its
+end, so a consumer parked anywhere behind still receives it, and the cost is proportional
+to what changed rather than to how far back the user has paged.
+
+The payload shape is unchanged — `{uri, messages, sidecar_received_at}`, the same shape the
+initial load produces — because the tail returns whole message states, not diffs. Lua
+upserts by id and does not care whether a batch is "the newest N" or "the three that
+changed". One push per chat, since the tail is global and carries chats this Neovim has
+never opened; those are dropped from delivery while the cursor still advances past them.
+
+A tail push carries **no `banner` key**, which is a statement about scope, not a value: the
+tail knows what changed, not what a chat's history state is. See `ui-conventions.md` for
+why an absent key must not be read as "no banner".
+
+#### The cursor
+
+`read_events` takes a cursor and returns the events after it. The rules the sidecar has to
+respect:
+
+- **It is opaque.** Hand it back exactly as received. Never parse it, never compare two of
+  them, never do arithmetic on one. "Am I behind?" is answered by `has_more`; "is my cursor
+  still valid?" by an `invalid_cursor` error. The one exception — detecting that the log
+  shrank underneath us — lives in a single named function so that it stays visible.
+- **It is persisted**, at
+  `${CHATMUX_DATA_DIR:-~/.local/share/chatmux}/consumers/chat-nvim/cursor.json`, written
+  to a temp file and renamed. A half-written cursor file is worse than no cursor file. The
+  path follows core's convention for consumers; chat.nvim is one consumer among others and
+  owns only its own file.
+- **It survives restarts**, which is the point: changes made while Neovim was closed are
+  delivered on the next connect instead of being lost.
+- **It recovers rather than stalls.** No stored cursor, an unreadable file, an
+  `invalid_cursor`, or a cursor ahead of `head_cursor` (SQLite rebuilt or truncated) all
+  resolve the same way: start from the current head and log one line. That deliberately
+  **skips whatever was missed** — replaying an unknown amount of history to a live buffer is
+  worse than a gap, and the gap is bounded by how long the anomaly lasted.
+
+#### Subscription is a latency hint, not the delivery mechanism
+
+The cursor loop is what makes delivery correct. A consumer built purely on
+`notifications/resources/updated` loses events whenever it is not connected, and an SSE
+stream that dies quietly stops the buffer updating with no signal — the same failure this
+whole path exists to remove, wearing a different hat.
+
+So the sidecar polls the tail on a timer (15s, `CHATMUX_POLL_MS`) **and** drains early when
+an SSE notification arrives. Never the reverse. Both triggers funnel through one guard so
+two drains cannot overlap; a trigger that lands mid-drain schedules one more pass instead of
+re-entering.
 
 ### Why the chat list has two paths
 
@@ -225,9 +289,18 @@ The sidecar is a standard MCP Streamable HTTP client connecting over unix socket
 SSE data line → JSON parse → check method
   → "notifications/resources/updated"
     → extract uri from params
-    → if uri in subscribedUris: fetch resource, emit stdout notification
-    → else: emit generic notification
+    → if uri not in subscribedUris: ignore
+    → if uri matches chat://chats/{id}/messages: drain the event tail
+    → else (chat://chats, chat://status): fetch resource, emit stdout notification
 ```
+
+The split is deliberate. Core notifies `chat://chats` on every change too, and that
+resource is the chat list's only update source — its ordering, unread hints and
+`last_message` preview all come from there. Routing it through the tail would freeze the
+list, which is the same bug in a different place.
+
+A timer drains the same tail every 15s regardless of SSE (see above), so SSE going quiet
+costs latency, not correctness.
 
 ## Error handling
 

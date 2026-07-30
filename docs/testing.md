@@ -109,7 +109,13 @@ run without a daemon by injecting a stub into `package.loaded["chat-nvim.sidecar
 ```bash
 nvim --headless -l scripts/f34-anchor-check.lua; echo "exit=$?"        # prints OK: 6/6
 nvim --headless -l scripts/f35-image-spec-check.lua; echo "exit=$?"    # prints ALL PASS: 16/16
+nvim --headless -l scripts/f9-banner-guard-check.lua; echo "exit=$?"   # prints PASS: 3/3
 ```
+
+`f9-banner-guard-check.lua` stubs only the sidecar and sets `state.current_chat = nil`, so
+nothing enters the render path: it asserts the banner state machine alone — a push with no
+`banner` key leaves the banner untouched, an explicit `null` clears it, a string updates it.
+Whether the banner is then *drawn* is a question for a real buffer, not for this script.
 
 `f35-image-spec-check.lua` stubs image.nvim as well as the sidecar: a fake renderer
 records the specs it is handed and draws nothing. It asserts placement (each ready image

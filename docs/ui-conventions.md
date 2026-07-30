@@ -137,6 +137,24 @@ messages is what would make a precise id → line-range map worth its bookkeepin
 ⚠️ JSON `null` decodes to `vim.NIL` in Lua — neither `nil` nor comparable to a number.
 Normalize before comparing, or every `retracted_at` comparison reports a change.
 
+### An absent key is not an empty value
+
+A push says nothing about the fields it does not carry. `handle_resource_updated` therefore
+recomputes the banner **only when the payload has a `banner` key at all**:
+
+- key absent (`params.banner == nil`) → this push is not about the banner; leave it alone.
+- key present with `null` (`vim.NIL`) → "there is no banner"; clear it.
+- key present with a string → update as usual.
+
+This is not hypothetical tidiness. Pushes sourced from the event tail carry only the
+messages that changed and no banner, while pushes sourced from a resource carry the whole
+picture. Recomputing from an absent key wipes the history line at the top of the chat the
+first time anyone edits a message — a row vanishes and nothing errors.
+
+The `vim.NIL` distinction above is what makes the two cases separable at all: a real `nil`
+is the only way a key can be missing, because a JSON `null` never arrives as one.
+`scripts/f9-banner-guard-check.lua` asserts both directions.
+
 ## Paging backwards through history
 
 `[` in the messages buffer loads one page (50) of older messages and prepends them. Without
