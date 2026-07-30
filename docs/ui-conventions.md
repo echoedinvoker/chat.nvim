@@ -73,6 +73,7 @@ another message
 | Chat list | `q` | Close all chat.nvim UI |
 | Chat list | `R` | Refresh chat list |
 | Messages | `c` | Open floating composer |
+| Messages | `[` | Load one page of older messages above the current ones |
 | Messages | `q` | Close messages, return to chat list |
 | Messages | `j/k/gg/G` | Native vim motion (free) |
 | Messages | `/` | Native vim search (free) |
@@ -128,13 +129,89 @@ it so a redraw does not yank a user reading history back down. The restored posi
 the *line number* held before the redraw, not the line the content moved to — acceptable
 because a change rarely alters line counts above the cursor.
 
-Redrawing the whole buffer on every change is deliberate. The messages resource returns
-at most 20 messages, so the redraw is cheap; a streaming bot editing once per second
-means one redraw per second at that size. Raising that limit is what would make a precise
-id → line-range map worth its bookkeeping.
+Redrawing the whole buffer on every change is deliberate. A chat holds one page (50) plus
+whatever `[` has pulled in, so the redraw stays cheap; a streaming bot editing once per
+second means one redraw per second at that size. A chat paged back through thousands of
+messages is what would make a precise id → line-range map worth its bookkeeping.
 
 ⚠️ JSON `null` decodes to `vim.NIL` in Lua — neither `nil` nor comparable to a number.
 Normalize before comparing, or every `retracted_at` comparison reports a change.
+
+## Paging backwards through history
+
+`[` in the messages buffer loads one page (50) of older messages and prepends them. Without
+it a chat exists in the UI only as its newest page — older messages are not "further up the
+scroll", they are absent.
+
+### The buffer header is 0, 2 or 3 lines
+
+```
+banner        state.banners[chat_id]     — upstream history state, may be absent
+older_hint    state.older_hint[chat_id]  — paging state, may be absent
+              blank line, present if either of the above is
+messages…
+```
+
+Both lines appear and disappear as paging state changes, which is why the anchoring below
+measures the buffer rather than counting prepended messages.
+
+### `preserve_view`, not `keep_cursor`
+
+`keep_cursor` restores the saved cursor position verbatim. That is correct only while a
+line number keeps meaning the same content — true for an edit, false for a prepend. After N
+lines are inserted above, old line L holds what used to be at L-N, so restoring L lands the
+reader somewhere else and the screen visibly jumps.
+
+`render_full(chat_id, { preserve_view = true })` compensates:
+
+```lua
+local before = vim.api.nvim_buf_line_count(bufnr)
+local view = vim.fn.winsaveview()          -- inside nvim_win_call: it acts on the current window
+-- …rebuild the buffer…
+local delta = vim.api.nvim_buf_line_count(bufnr) - before
+view.lnum, view.topline = view.lnum + delta, view.topline + delta
+pcall(vim.fn.winrestview, view)
+```
+
+The delta comes from the buffer's line count, **not** from how many messages were added:
+the header lines shift the reader too. `topline` is restored alongside `lnum` — moving only
+the cursor keeps the right message under the cursor while the viewport slides.
+
+### The paging ladder
+
+`before` is a timestamp, and core filters on a strict `timestamp < before`. Paging with
+"the oldest timestamp I hold" therefore skips any message sharing that timestamp that did
+not fit in the page — silently, and forever. Real data has such ties (one local vault: 630
+tie groups, the largest 22 messages).
+
+| rung | `before` | effect |
+|---|---|---|
+| 1 (default) | `oldest + 1` | inclusive of the tie; re-fetches messages already held, which `append_messages` drops by id |
+| 2 (only after rung 1 adds nothing) | `oldest` | strict; guarantees progress at the cost of the rest of that tie |
+
+Rung 2 exists for one degenerate case: an entire page sharing a single timestamp, where
+rung 1 makes no progress and would spin. It runs **at most once** — the retry flag makes a
+third request unreachable. Losing a few messages of one tie beats a `[` that never advances.
+
+Rung 1 costs a visible overlap: each page re-fetches the whole boundary tie, so the number
+of *new* messages per press is `PAGE_SIZE - tie`, not `PAGE_SIZE - 1`. In a tie-free chat
+that reads as +49 per press; in a tie-heavy one it can be +28. A short page is not evidence
+of dropped messages.
+
+### State
+
+| table | meaning |
+|---|---|
+| `state.has_more[chat_id]` | is there anything older in the local DB? `nil` = never asked (a request is allowed), only an explicit `false` blocks one |
+| `state.in_flight[chat_id]` | a request is in the air; `[` is a no-op until it lands |
+| `state.older_hint[chat_id]` | the header line, worded by the sidecar |
+
+There is deliberately no cached oldest-timestamp: it is
+`state.messages[chat_id][1].timestamp`, and a second copy would be a second truth.
+
+`in_flight` is cleared on **every** callback exit, including the error path, and by
+`state.reset()`. A stale `true` disables `[` for that chat permanently with no error
+anywhere — the hardest failure here to notice.
 
 ## Notification strategy
 

@@ -30,6 +30,15 @@ function M.set_messages_keymaps(bufnr)
   vim.keymap.set("n", "q", function()
     require("chat-nvim.ui.messages").close()
   end, opts)
+
+  -- `[` is a built-in prefix ([[, [m, ...), so without the nowait already in opts Neovim
+  -- would sit out timeoutlen waiting to see if a second key follows.
+  vim.keymap.set("n", "[", function()
+    local state = require("chat-nvim.state")
+    if state.current_chat then
+      require("chat-nvim.ui.messages").load_older(state.current_chat)
+    end
+  end, opts)
 end
 
 function M.set_composer_keymaps(bufnr, on_send, on_cancel)

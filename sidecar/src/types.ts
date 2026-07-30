@@ -72,6 +72,25 @@ export interface ReadMessagesParams {
   after?: number;
 }
 
+/**
+ * `readMessages` 的回傳形狀。具名（而非跟其他 method 一樣內聯）是因為它有 4 個欄位、
+ * 且 `has_more` / `oldest_timestamp` 是 Lua 往回分頁的唯一依據——分頁能不能往上走由
+ * 這裡的欄位決定，值得一個能被引用的名字。
+ *
+ * `has_more` 的語意是「**本機 DB** 裡還有更舊的」，不是「這間聊天室就這麼多」。
+ * 後者只有 history.state 的 complete/exhausted 有資格宣稱，見 chatmux
+ * docs/storage-schema.md:105-121。
+ */
+export interface ReadMessagesResult {
+  messages: Message[];
+  banner: string | null;
+  has_more: boolean;
+  /** 本頁最舊的 timestamp（毫秒）。空聊天室是 null，不是 undefined。 */
+  oldest_timestamp: number | null;
+  /** 頂端狀態行。文案在 sidecar 決定（見 olderHint），Lua 只負責印。 */
+  older_hint: string | null;
+}
+
 export interface SendMessageParams {
   chat_id: string;
   text: string;

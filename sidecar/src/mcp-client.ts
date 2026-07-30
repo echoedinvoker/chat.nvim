@@ -6,6 +6,7 @@ import type {
   McpSendResult,
   McpSearchResultItem,
   Message,
+  ReadMessagesResult,
 } from "./types.ts";
 
 const DEFAULT_SOCKET = `${process.env.HOME}/.local/share/chatmux/chatmux.sock`;
@@ -62,10 +63,17 @@ export class McpClient {
     limit?: number;
     before?: number;
     after?: number;
-  }): Promise<{ messages: Message[]; banner: string | null }> {
+  }): Promise<ReadMessagesResult> {
+    // Mirrors core's own `limit ?? 20` (chatmux src/core/mcp/tools.ts:174). Duplicating the
+    // number is the lesser evil: olderHint has to name a page size in prose, and reading
+    // "按 [ 載入 undefined 筆" is worse than a constant that has to be kept in step. If
+    // core's default changes, this changes with it.
+    const effectiveLimit = params.limit ?? 20;
     const raw = await this.callTool("read_messages", {
       chat_id: params.chat_id,
-      ...(params.limit !== undefined && { limit: params.limit }),
+      // Sent explicitly rather than left to core's default, so the page size the hint
+      // promises and the page size actually requested cannot drift apart.
+      limit: effectiveLimit,
       ...(params.before !== undefined && { before: params.before }),
       ...(params.after !== undefined && { after: params.after }),
     });
@@ -76,6 +84,20 @@ export class McpClient {
         toMessage(m, params.chat_id)
       ),
       banner: historyBanner(parsed.history as McpHistoryRaw | undefined),
+      // Compared against `true` explicitly, so a missing key and an `undefined` both land
+      // on false. The conservative direction: losing an "there is older" hint costs a
+      // prompt the user never sees, while a spurious one costs a request that is
+      // guaranteed to come back empty and a `[` that looks broken.
+      has_more: parsed.has_more === true,
+      oldest_timestamp:
+        typeof parsed.oldest_timestamp === "number" ? parsed.oldest_timestamp : null,
+      older_hint: olderHint(
+        {
+          has_more: parsed.has_more === true,
+          state: (parsed.history as McpHistoryRaw | undefined)?.state,
+        },
+        effectiveLimit,
+      ),
     };
   }
 
@@ -287,6 +309,38 @@ const HISTORY_BANNERS: Record<string, string> = {
 export function historyBanner(history: McpHistoryRaw | null | undefined): string | null {
   if (!history) return null;
   return HISTORY_BANNERS[history.state] ?? null;
+}
+
+/**
+ * The line above the oldest loaded message: can the user press `[` for more, and if not,
+ * what is honestly known about what lies further back.
+ *
+ * `has_more` wins over every history state, because it answers a different question —
+ * "is there more in the local DB right now" — and that is the one `[` acts on.
+ *
+ * When there is nothing older locally, the wording turns on who is allowed to claim
+ * completeness. Per chatmux docs/storage-schema.md:105-121, none of the backfill states
+ * except `complete` licenses telling the user "this is everything". `unknown` (and a
+ * missing field) is the common case locally — 40 LINE chats plus 71 with no state at all —
+ * so getting it wrong is not pedantry, it is the line the user reads most often.
+ *
+ * `partial` / `backfilling` / `unavailable` return null on purpose: historyBanner already
+ * renders a line for each of those, and two lines saying the same thing reads as a bug.
+ */
+export function olderHint(
+  input: { has_more: boolean; state?: string },
+  pageSize: number,
+): string | null {
+  if (input.has_more) {
+    return `↑ 還有更舊的訊息（按 [ 載入 ${pageSize} 筆）`;
+  }
+  if (input.state === "complete") {
+    return "── 已是這個聊天室的最開頭 ──";
+  }
+  if (input.state === undefined || input.state === "unknown") {
+    return "── 已載入本機全部；更舊的是否存在未知 ──";
+  }
+  return null;
 }
 
 export function toMessage(raw: McpMessageRaw, chatId: string): Message {

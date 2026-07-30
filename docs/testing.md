@@ -99,6 +99,30 @@ Since Lua plugin code is not TDD'd, verify manually:
 
 Check these after any significant Lua change.
 
+### Headless assertion scripts
+
+Some Lua behaviour cannot be settled by looking: "the view did not jump" and "the paging
+ladder stopped" both look fine for the first second, and a screenshot cannot tell a
+correctly anchored buffer from an off-by-delta one. Those get a script under `scripts/`,
+run without a daemon by injecting a stub into `package.loaded["chat-nvim.sidecar"]`:
+
+```bash
+nvim --headless -l scripts/f34-anchor-check.lua; echo "exit=$?"   # prints OK: 6/6
+```
+
+Conventions for these scripts:
+
+- Write results with `io.write`, never `print` / `vim.notify` — queued messages hit
+  "Press ENTER" and hang a headless run.
+- Set `vim.o.lines` / `vim.o.columns` and load enough messages to outgrow the window.
+  Headless defaults leave `topline` at 1, where a topline assertion tests nothing — assert
+  `topline > 1` first and fail loudly if it does not hold.
+- Have the stub answer inside `vim.schedule`, matching the real sidecar, so the callback's
+  own scheduling is exercised. Wait on a condition (`vim.wait(2000, cond)`), never a fixed
+  sleep. To assert that *no* further request happens, wait once more before claiming it.
+- Mutate the code under test once and confirm the assertion turns red. An assertion that
+  passes against a deliberately broken implementation is decoration.
+
 ## Latency instrumentation
 
 Phase 4 adds timestamp-based latency tracking:

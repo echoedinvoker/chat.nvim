@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { toMessage, historyBanner } from "../src/mcp-client.ts";
+import { toMessage, historyBanner, olderHint } from "../src/mcp-client.ts";
 import type { McpMessageRaw } from "../src/types.ts";
 
 function raw(overrides: Partial<McpMessageRaw> = {}): McpMessageRaw {
@@ -95,4 +95,39 @@ describe("historyBanner turns core's history state into one line of prose", () =
   test("an unrecognised state shows nothing rather than a wrong claim", () => {
     expect(historyBanner({ state: "something_new" } as never)).toBeNull();
   });
+});
+
+describe("olderHint 頂端狀態行", () => {
+  test("還有更舊的 → 提示可按 [", () => {
+    const h = olderHint({ has_more: true, state: "unknown" }, 50);
+    expect(h).toBe("↑ 還有更舊的訊息（按 [ 載入 50 筆）");
+  });
+
+  test("PAGE_SIZE 反映在文案裡", () => {
+    expect(olderHint({ has_more: true, state: "partial" }, 100))
+      .toBe("↑ 還有更舊的訊息（按 [ 載入 100 筆）");
+  });
+
+  test("complete 是唯一能宣稱「最開頭」的狀態", () => {
+    expect(olderHint({ has_more: false, state: "complete" }, 50))
+      .toBe("── 已是這個聊天室的最開頭 ──");
+  });
+
+  test("unknown：只敢說本機載完，不敢說這是全部", () => {
+    const h = olderHint({ has_more: false, state: "unknown" }, 50);
+    expect(h).toBe("── 已載入本機全部；更舊的是否存在未知 ──");
+    // storage-schema.md：只有 exhausted/complete 有資格說 this is everything
+    expect(h).not.toBe("── 已是這個聊天室的最開頭 ──");
+  });
+
+  test("缺 state 欄位比照 unknown 處理", () => {
+    expect(olderHint({ has_more: false, state: undefined }, 50))
+      .toBe("── 已載入本機全部；更舊的是否存在未知 ──");
+  });
+
+  for (const state of ["partial", "backfilling", "unavailable"]) {
+    test(`${state} 已由既有 banner 說明，hint 留空不重複`, () => {
+      expect(olderHint({ has_more: false, state }, 50)).toBeNull();
+    });
+  }
 });

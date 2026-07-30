@@ -44,7 +44,7 @@ or on error:
 | Method | Params | Result | Notes |
 |--------|--------|--------|-------|
 | `list_chats` | `{platform?, query?, limit?, cursor?}` | `{chats, total, truncated, truncation_banner}` | With no filter and no explicit page, reads the unpaginated `chat://chats` resource so empty chats are not cut off (see below). With any of them, uses the paginated `list_chats` tool. |
-| `read_messages` | `{chat_id, limit?, before?, after?}` | `{messages: Message[]}` | Reads messages. `before`/`after` are epoch ms. **Side effect**: sidecar auto-subscribes to this chat's messages resource. |
+| `read_messages` | `{chat_id, limit?, before?, after?}` | `{messages, banner, has_more, oldest_timestamp, older_hint}` | Reads one page. `before`/`after` are epoch ms; `before` means strictly `timestamp < before`. See [Paging fields](#paging-fields). **Side effect**: sidecar auto-subscribes to this chat's messages resource. |
 | `send_message` | `{chat_id, text}` | `{success: boolean, error?}` | Sends a text message via chatmux daemon. |
 | `search_messages` | `{query, platform?, chat_id?, limit?}` | `{messages: Message[]}` | FTS5 trigram search. |
 | `get_status` | `{}` | `{daemon: StatusObj}` | Returns daemon + adapter connection status. |
@@ -80,6 +80,48 @@ or on error:
 make a message identifiable as *changed* rather than *new*. A retracted message arrives
 with its text already replaced by the placeholder — the sidecar substitutes it, so Lua
 never has to decide what a retracted message looks like.
+
+### Paging fields
+
+`read_messages` answers with the page plus everything Lua needs to decide whether there is
+a page above it:
+
+```typescript
+{
+  messages: Message[]              // newest-first, as the daemon returns them
+  banner: string | null            // upstream history state, e.g. "更舊的訊息尚未補抓"
+  has_more: boolean                // is there anything older in the local DB?
+  oldest_timestamp: number | null  // oldest timestamp in *this page*, null if empty
+  older_hint: string | null        // the line rendered above the messages
+}
+```
+
+`has_more` is the daemon's own answer, not a client-side guess: core fetches `limit + 1`
+rows and reports whether it had to trim. Inferring it locally ("the page came back full,
+so there is probably more") is wrong on the exact-multiple boundary. Anything other than a
+literal `true` is read as `false`, so a daemon that omits the field costs at most a missing
+hint rather than a request that is guaranteed to come back empty.
+
+**`has_more: false` does not mean "this is the whole conversation."** It means the local DB
+is exhausted. Whether the platform still holds older messages is a separate question,
+answered by `history.state`, and only `complete` licenses that claim — see
+`chatmux/docs/storage-schema.md`. `older_hint` encodes that distinction so the Lua layer
+never has to:
+
+| `has_more` | `history.state` | `older_hint` |
+|---|---|---|
+| `true` | any | `↑ 還有更舊的訊息（按 [ 載入 N 筆）` |
+| `false` | `complete` | `── 已是這個聊天室的最開頭 ──` |
+| `false` | `unknown` / absent | `── 已載入本機全部；更舊的是否存在未知 ──` |
+| `false` | `partial` / `backfilling` / `unavailable` | `null` — `banner` already explains it |
+
+The middle two rows are the point of the table. On a real vault most LINE chats are
+`unknown`, so the common case is the one where claiming "this is the beginning" would be a
+lie.
+
+The page size in the hint is the size actually requested (`params.limit ?? 20`, matching
+core's default in `chatmux/src/core/mcp/tools.ts`). The limit is always sent explicitly so
+the number in the hint and the number fetched cannot drift apart.
 
 ## Notification types (Sidecar → Lua)
 

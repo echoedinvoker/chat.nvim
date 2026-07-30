@@ -7,6 +7,10 @@ local M = {}
 local bufnr = nil
 local winnr = nil
 
+--- How many messages one page holds, both on open and on every `[`. Core's own default is
+--- 20, and not passing a limit at all is why a chat only ever existed as its newest 20.
+local PAGE_SIZE = 50
+
 local function format_time(timestamp)
   if not timestamp or timestamp == vim.NIL then return "??:??" end
   local secs = math.floor(timestamp / 1000)
@@ -45,23 +49,48 @@ end
 --- opts.keep_cursor: stay where the reader was instead of jumping to the newest message.
 --- Used when a redraw is caused by an edit or retraction somewhere above, which is not a
 --- reason to yank the reader down to the bottom.
+---
+--- opts.preserve_view: same intent, but for a redraw that *prepends* lines. keep_cursor
+--- restores the saved position verbatim, which is only correct while line numbers keep
+--- meaning the same content; after prepending N lines the old line L holds what used to be
+--- at L-N, so restoring L lands the reader somewhere else and the screen visibly jumps.
+--- This path compensates with the buffer's own line-count delta.
 function M.render_full(chat_id, opts)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
 
   local keep_cursor = opts and opts.keep_cursor
+  local preserve_view = opts and opts.preserve_view
   local win_valid = winnr and vim.api.nvim_win_is_valid(winnr)
   local saved = nil
   if keep_cursor and win_valid then
     saved = vim.api.nvim_win_get_cursor(winnr)
   end
 
+  local view, before_count = nil, nil
+  if preserve_view and win_valid then
+    before_count = vim.api.nvim_buf_line_count(bufnr)
+    -- winsaveview acts on the *current* window. `[` is a buffer-local map so the messages
+    -- window is usually current, but render_full is also reached from other paths.
+    vim.api.nvim_win_call(winnr, function()
+      view = vim.fn.winsaveview()
+    end)
+  end
+
   local messages = state.messages[chat_id] or {}
   local lines = format_messages(messages)
 
-  local banner = state.banners[chat_id]
-  if banner then
-    table.insert(lines, 1, "")
-    table.insert(lines, 1, banner)
+  -- Header is 0, 2 or 3 lines depending on paging state, which is why the preserve_view
+  -- delta above is measured on the buffer rather than counted from the prepended messages.
+  local header = {}
+  if state.banners[chat_id] then
+    table.insert(header, state.banners[chat_id])
+  end
+  if state.older_hint[chat_id] then
+    table.insert(header, state.older_hint[chat_id])
+  end
+  if #header > 0 then
+    table.insert(header, "")
+    lines = vim.list_extend(header, lines)
   end
 
   vim.bo[bufnr].modifiable = true
@@ -69,6 +98,21 @@ function M.render_full(chat_id, opts)
   vim.bo[bufnr].modifiable = false
 
   if not win_valid then return end
+
+  if view then
+    -- The delta has to be measured on the buffer, not derived from how many messages were
+    -- prepended: the banner and hint lines above the messages appear and disappear with the
+    -- paging state, so they shift the reader's line just as much as the messages do.
+    local delta = vim.api.nvim_buf_line_count(bufnr) - before_count
+    view.lnum = view.lnum + delta
+    view.topline = view.topline + delta
+    vim.api.nvim_win_call(winnr, function()
+      -- Out of range should not be reachable, but an error here would kill the callback
+      -- that still has to clear in_flight.
+      pcall(vim.fn.winrestview, view)
+    end)
+    return
+  end
 
   if saved then
     -- A retraction shortens the buffer, so the old line may no longer exist.
@@ -105,6 +149,58 @@ function M.append(chat_id, new_messages)
   else
     pcall(vim.api.nvim_win_set_cursor, win, cursor)
   end
+end
+
+--- One rung of the paging ladder. `before` is a timestamp and core's filter is a strict
+--- `timestamp < before`, so the rung is chosen by what it costs to be wrong:
+---   rung 1 (before = oldest + 1, i.e. `timestamp <= oldest`) can never skip a message that
+---     shares the oldest timestamp; it re-fetches those, and append_messages drops them by id.
+---   rung 2 (before = oldest, strict) is only used when rung 1 returned nothing new, which
+---     means the whole page shares one timestamp. It guarantees forward progress at the cost
+---     of the rest of that tie — being stuck forever is worse than losing a few (R1/R2).
+--- is_retry exists so rung 2 can never trigger rung 3: no recursion, at most two requests.
+local function request_older(chat_id, before, is_retry)
+  state.in_flight[chat_id] = true
+  sidecar.send("read_messages", {
+    chat_id = chat_id,
+    limit = PAGE_SIZE,
+    before = before,
+  }, function(result, err)
+    vim.schedule(function()
+      -- Cleared on every exit, including the error one: a stale `true` disables `[` for
+      -- this chat with no error shown anywhere (R6).
+      state.in_flight[chat_id] = false
+      if err or not result then return end
+
+      local added = state.append_messages(chat_id, result.messages or {})
+      state.sort_messages(chat_id)
+      state.has_more[chat_id] = result.has_more
+      state.older_hint[chat_id] = state.norm(result.older_hint)
+      state.banners[chat_id] = state.norm(result.banner)
+
+      if #added == 0 and result.has_more and not is_retry then
+        -- before - 1 drops the inclusive +1 back to a strict `<`.
+        request_older(chat_id, before - 1, true)
+        return
+      end
+
+      M.render_full(chat_id, { preserve_view = true })
+    end)
+  end)
+end
+
+--- Load one page of older messages above what is already in the buffer.
+function M.load_older(chat_id)
+  if not chat_id then return end
+  if state.in_flight[chat_id] then return end
+  -- nil means "never asked", which is a reason to ask. Only an explicit false is an answer.
+  if state.has_more[chat_id] == false then return end
+
+  local msgs = state.messages[chat_id]
+  local oldest = msgs and msgs[1] and msgs[1].timestamp
+  if not oldest or oldest == vim.NIL then return end
+
+  request_older(chat_id, oldest + 1, false)
 end
 
 function M.open(chat_id)
@@ -159,11 +255,15 @@ function M.open(chat_id)
   pcall(vim.api.nvim_buf_set_name, bufnr, "chat-nvim://messages/" .. chat_id)
 
   -- Fetch messages
-  sidecar.send("read_messages", { chat_id = chat_id }, function(result, err)
+  sidecar.send("read_messages", { chat_id = chat_id, limit = PAGE_SIZE }, function(result, err)
     vim.schedule(function()
       if err then return end
       state.update_messages(chat_id, result.messages)
       state.banners[chat_id] = state.norm(result.banner)
+      -- Without these two the first `[` has nothing to go on: has_more nil would let it
+      -- fire blindly, and the top line would stay silent about there being more above.
+      state.has_more[chat_id] = result.has_more
+      state.older_hint[chat_id] = state.norm(result.older_hint)
       state.mark_read(chat_id)
       M.render_full(chat_id)
       -- Refresh chat list to update unread markers
