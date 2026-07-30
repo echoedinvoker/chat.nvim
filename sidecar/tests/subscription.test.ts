@@ -448,6 +448,45 @@ describe("SubscriptionManager", () => {
     expect(pushed.media).toBeUndefined();
   });
 
+  test("a retraction is grouped and pushed like any other change", async () => {
+    // The retraction leg has no end-to-end route: Telegram's private-chat deletes never
+    // reach chatmux at all (the adapter drops them for want of a peer), so this and the
+    // core's read-events tests are the whole net under it.
+    //
+    // Two things are asserted because two different things could break. Grouping reads
+    // message.chat_id and never event.type, so an unsend has to land on the same uri an
+    // edit does. And core clears the text on retraction, so the push has to carry the
+    // placeholder — an empty line is indistinguishable from a broken plugin, which is
+    // exactly the shape F33 had.
+    const unsent = {
+      cursor: "evt:101", type: "unsend",
+      message: {
+        id: "telegram:1", chat_id: "telegram:AAA",
+        sender: { id: "telegram:9", display_name: "Bot" },
+        timestamp: 1769000000000,
+        content: { type: "text", text: null },
+        edited_at: null, retracted_at: 1769000002000,
+      },
+    };
+    const client = createTailClient({
+      readEvents: mock(() => Promise.resolve({
+        events: [unsent],
+        next_cursor: "evt:101", head_cursor: "evt:101", has_more: false,
+      })),
+      openSseStream: mock(() =>
+        Promise.resolve(sseOf(NOTIFY("chat://chats/telegram:AAA/messages")))),
+    });
+    const mgr = newManager(client);
+    await mgr.subscribeChat("telegram:AAA");
+    await mgr.startSseLoop();
+
+    const push = notifications.find((n) => n.method === "resource_updated")!;
+    expect(push.params.uri).toBe("chat://chats/telegram:AAA/messages");
+    const pushed = (push.params.messages as any[])[0];
+    expect(pushed.id).toBe("telegram:1");
+    expect(pushed.text).toBe("[訊息已收回]");
+  });
+
   test("has_more keeps draining until the tail is caught up", async () => {
     // Seeded, so the first read is a real one. Without a stored cursor the first call is
     // the bootstrap ("start from head, do not replay"), which would swallow page one.
