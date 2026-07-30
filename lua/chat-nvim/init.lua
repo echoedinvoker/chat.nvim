@@ -44,9 +44,16 @@ local function handle_resource_updated(params)
     -- Computed outside the branches below on purpose: a push can both add messages and
     -- change the banner, and folding this into the append branch would leave the banner
     -- stuck on stale wording. An `unavailable` push carries neither adds nor changes.
-    local new_banner = state.norm(params.banner)
-    local banner_changed = state.banners[chat_id] ~= new_banner
-    if banner_changed then state.banners[chat_id] = new_banner end
+    -- A push that carries no `banner` key is not saying the banner is gone, it is saying
+    -- nothing about it — the event-tail path (F9) pushes only the messages that changed.
+    -- JSON null decodes to vim.NIL, not nil, so a real nil is the only way a key can be
+    -- absent, and an explicit null still means "there is no banner" and must clear it.
+    local banner_changed = false
+    if params.banner ~= nil then
+      local new_banner = state.norm(params.banner)
+      banner_changed = state.banners[chat_id] ~= new_banner
+      if banner_changed then state.banners[chat_id] = new_banner end
+    end
 
     if chat_id == state.current_chat then
       if #changed > 0 or needs_reorder or banner_changed then
@@ -269,5 +276,9 @@ function M.statusline()
   end
   return ""
 end
+
+-- Exported for scripts/f9-banner-guard-check.lua only: the banner guard's failure mode is
+-- a line quietly disappearing, which nothing else can assert from outside.
+M._test_handle_resource_updated = handle_resource_updated
 
 return M
