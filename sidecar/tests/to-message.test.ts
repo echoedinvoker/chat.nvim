@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { toMessage, historyBanner, olderHint } from "../src/mcp-client.ts";
+import { toMessage, historyBanner, olderHint, resolvePageMedia } from "../src/mcp-client.ts";
 import type { McpMessageRaw } from "../src/types.ts";
 
 function raw(overrides: Partial<McpMessageRaw> = {}): McpMessageRaw {
@@ -130,4 +130,90 @@ describe("olderHint 頂端狀態行", () => {
       expect(olderHint({ has_more: false, state }, 50)).toBeNull();
     });
   }
+});
+
+// ── F35 Phase 5.1：媒體三態與 placeholder 文案 ────────────────────────
+describe("toMessage — 媒體三態（F35）", () => {
+  test("帶出 content_type，讓 Lua 算得出影像高度", () => {
+    // 不從 text 反推：placeholder 文案是會改的（本輪就改了兩個），
+    // 拿文案當結構化資料用，失效方式會是「高度悄悄變成 12」。
+    expect(toMessage(raw({ content: { type: "sticker", sticker_id: "1" } }), "c").content_type)
+      .toBe("sticker");
+    expect(toMessage(raw({ content: { type: "image" } }), "c").content_type).toBe("image");
+    expect(toMessage(raw(), "c").content_type).toBe("text");
+  });
+
+  test("快取有檔時標 ready 並帶路徑", () => {
+    const m = toMessage(raw({ content: { type: "image" } }), "telegram:-100123", {
+      path: "/c/line/msg/m1.jpg", mime: "image/jpeg",
+    });
+    expect(m.media).toEqual({ state: "ready", path: "/c/line/msg/m1.jpg" });
+  });
+
+  test("LINE 端已刪時明說，不留空白", () => {
+    const m = toMessage(raw({ content: { type: "image" } }), "telegram:-100123", {
+      unavailable: "gone",
+    });
+    expect(m.media).toEqual({ state: "gone" });
+    expect(m.text).toBe("[圖片已不存在於 LINE]");
+  });
+
+  test("貼圖用貼圖的說法", () => {
+    const m = toMessage(raw({ content: { type: "sticker", sticker_id: "1" } }), "telegram:-100123", {
+      unavailable: "gone",
+    });
+    expect(m.text).toBe("[貼圖已不存在於 LINE]");
+  });
+
+  test("還沒回來時是載入中，不是壞了", () => {
+    const m = toMessage(raw({ content: { type: "image" } }), "telegram:-100123", undefined);
+    expect(m.media).toEqual({ state: "pending" });
+    expect(m.text).toBe("[圖片載入中…]");
+  });
+
+  test("收回優先於媒體", () => {
+    const m = toMessage(
+      raw({ content: { type: "image" }, retracted_at: 99 }),
+      "telegram:-100123",
+      { path: "/c/x.jpg", mime: "image/jpeg" },
+    );
+    expect(m.text).toBe("[訊息已收回]");
+    expect(m.media).toBeUndefined();
+  });
+});
+
+// ── F35 Phase 5.2：一頁內解析媒體（併發上限 4、總預算 3s）─────────────
+const rows = (n: number) =>
+  Array.from({ length: n }, (_, i) => ({ id: `line:m${i}`, content: { type: "image" } }) as any);
+
+describe("resolvePageMedia", () => {
+  test("keeps at most 4 requests in flight", async () => {
+    let inFlight = 0, peak = 0;
+    const out = await resolvePageMedia(rows(10), async (id) => {
+      inFlight++; peak = Math.max(peak, inFlight);
+      await Bun.sleep(10);
+      inFlight--;
+      return { path: `/c/${id}.jpg`, mime: "image/jpeg" };
+    }, { concurrency: 4, deadline: new Promise(() => {}) });
+
+    expect(peak).toBeLessThanOrEqual(4);
+    expect(out.size).toBe(10);
+  });
+
+  test("gives up on a straggler without holding the page hostage", async () => {
+    let fireDeadline: () => void = () => {};
+    const deadline = new Promise<void>((r) => { fireDeadline = r; });
+
+    const p = resolvePageMedia(rows(10), async (id) => {
+      if (id === "line:m3") return await new Promise(() => {});   // 永不 resolve
+      return { path: `/c/${id}.jpg`, mime: "image/jpeg" };
+    }, { concurrency: 4, deadline });
+
+    await Bun.sleep(20);
+    fireDeadline();
+    const out = await p;
+
+    expect(out.get("line:m3")).toBeUndefined();
+    expect(out.size).toBe(9);
+  });
 });

@@ -107,8 +107,22 @@ correctly anchored buffer from an off-by-delta one. Those get a script under `sc
 run without a daemon by injecting a stub into `package.loaded["chat-nvim.sidecar"]`:
 
 ```bash
-nvim --headless -l scripts/f34-anchor-check.lua; echo "exit=$?"   # prints OK: 6/6
+nvim --headless -l scripts/f34-anchor-check.lua; echo "exit=$?"        # prints OK: 6/6
+nvim --headless -l scripts/f35-image-spec-check.lua; echo "exit=$?"    # prints ALL PASS: 16/16
 ```
+
+`f35-image-spec-check.lua` stubs image.nvim as well as the sidecar: a fake renderer
+records the specs it is handed and draws nothing. It asserts placement (each ready image
+one row under its header, at the cached path, at the height its content type calls for),
+absence (`pending` / `gone` / `video` produce no spec but do print the sidecar's wording),
+and that prepending a page moves every image by exactly the buffer's line delta.
+
+**Know what these scripts cannot see.** The fake renderer produces no virtual lines, so
+anything about how much space an image actually occupies on screen is invisible to it. A
+version of this feature reserved real blank lines *and* let image.nvim reserve virtual
+ones, leaving a second gap under every picture the same height as the picture — both
+scripts stayed green throughout, and a person spotted it in seconds. Mechanical assertions
+own placement; a human owns whether the screen looks right.
 
 Conventions for these scripts:
 

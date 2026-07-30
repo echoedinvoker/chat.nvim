@@ -68,11 +68,16 @@ or on error:
   id: string            // Platform message ID
   chat_id: string
   sender_name: string
-  text: string          // Message content (stickers: "[sticker:pkg/id]", images: "[image]")
+  text: string          // Message content; see the placeholder table below
   timestamp: number     // Epoch ms (LINE's createdTime)
   is_self: boolean      // true if sent by the user
   edited_at: number | null      // Non-null once edited in place; text is the current version
   retracted_at: number | null   // Non-null once retracted; text is already a placeholder
+  content_type: string          // core's own content.type, passed through
+  media?: {                     // present only on image/sticker messages
+    state: "ready" | "pending" | "gone"
+    path?: string               // local cache path, set only when state is "ready"
+  }
 }
 ```
 
@@ -80,6 +85,35 @@ or on error:
 make a message identifiable as *changed* rather than *new*. A retracted message arrives
 with its text already replaced by the placeholder — the sidecar substitutes it, so Lua
 never has to decide what a retracted message looks like.
+
+`content_type` exists so Lua can size an inline image without parsing `text`. Inferring
+the type from the placeholder wording would make that wording load-bearing, and wording
+changes quietly.
+
+#### `media` and the placeholder table
+
+`media.path` is always a local file core has already fetched and cached. Lua never sees a
+URL, a header, or a key — which of the three LINE source shapes a message came from is
+settled inside the adapter and invisible from here.
+
+Every state's wording is decided in the sidecar, not in Lua. Lua renders what it is given:
+
+| Condition | `media.state` | `text` |
+|---|---|---|
+| Retracted (wins over everything) | absent | `[訊息已收回]` |
+| Cached and ready | `ready` | unchanged (`[sticker:pkg/id]` / `[image]`) |
+| Not fetched yet, or the page's 3s budget lapsed | `pending` | `[圖片載入中…]` |
+| Deleted on LINE's side | `gone` | `[圖片已不存在於 LINE]` / `[貼圖已不存在於 LINE]` |
+| Not media at all (`video` / `audio` / `file`) | absent | `[video]` etc., unchanged |
+
+The `gone` row is the point of the whole table. A message the platform deleted has to say
+so: rendering nothing would be indistinguishable from the plugin being broken, which is
+the failure shape this project keeps rediscovering.
+
+`pending` is not an error either. One page resolves its images with at most 4 requests in
+flight against a single 3s budget for the whole page; anything still outstanding when the
+budget lapses comes back as `pending` and fills in on the next redraw. One slow image
+must never hold a page of text hostage.
 
 ### Paging fields
 

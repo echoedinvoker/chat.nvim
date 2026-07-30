@@ -1,6 +1,7 @@
 local state = require("chat-nvim.state")
 local sidecar = require("chat-nvim.sidecar")
 local keymap = require("chat-nvim.keymap")
+local image = require("chat-nvim.ui.image")
 
 local M = {}
 
@@ -17,8 +18,15 @@ local function format_time(timestamp)
   return os.date("%H:%M", secs)
 end
 
+--- Returns the lines, plus the 0-based row each message's header landed on.
+---
+--- The rows come back from here rather than being recounted later because this loop is
+--- the only place that knows how many lines a message took — a multi-line body and the
+--- rows reserved for an image both change the answer, and a second counter written
+--- against the same rules is a second thing that can drift out of step with them.
 local function format_messages(messages)
   local lines = {}
+  local rows = {}
   for _, msg in ipairs(messages) do
     local sender = msg.sender_name
     if sender == nil or sender == vim.NIL then
@@ -27,6 +35,7 @@ local function format_messages(messages)
     if msg.is_self then sender = "Me" end
     local time = format_time(msg.timestamp)
 
+    table.insert(rows, #lines)   -- 0-based row of the header we are about to write
     table.insert(lines, "## " .. sender .. "  " .. time)
     local text = msg.text
     if msg.retracted_at and msg.retracted_at ~= vim.NIL then
@@ -41,9 +50,17 @@ local function format_messages(messages)
     for line in (text .. "\n"):gmatch("([^\n]*)\n") do
       table.insert(lines, line)
     end
+    -- F35: no blank lines are reserved for an image here, on purpose. image.nvim already
+    -- reserves the space as virtual lines (image.lua:124), sized from the height it
+    -- actually rendered at — reserving real lines as well made every image sit above a
+    -- second, equally tall gap. A first version did exactly that, on the theory that
+    -- virtual lines would break `[`'s preserve_view because they do not count towards the
+    -- buffer's line delta. They do not need to: topline and lnum are buffer line numbers,
+    -- so restoring topline + delta lands on the same content, and virtual lines ride along
+    -- with the extmark of the line they belong to.
     table.insert(lines, "")
   end
-  return lines
+  return lines, rows
 end
 
 --- opts.keep_cursor: stay where the reader was instead of jumping to the newest message.
@@ -77,7 +94,7 @@ function M.render_full(chat_id, opts)
   end
 
   local messages = state.messages[chat_id] or {}
-  local lines = format_messages(messages)
+  local lines, msg_rows = format_messages(messages)
 
   -- Header is 0, 2 or 3 lines depending on paging state, which is why the preserve_view
   -- delta above is measured on the buffer rather than counted from the prepended messages.
@@ -88,14 +105,24 @@ function M.render_full(chat_id, opts)
   if state.older_hint[chat_id] then
     table.insert(header, state.older_hint[chat_id])
   end
+  local header_offset = 0
   if #header > 0 then
     table.insert(header, "")
+    header_offset = #header
     lines = vim.list_extend(header, lines)
   end
 
   vim.bo[bufnr].modifiable = true
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
   vim.bo[bufnr].modifiable = false
+
+  -- Placed after the lines are in: image.nvim anchors on an extmark, and an extmark set
+  -- against rows that are about to be replaced wholesale would be pointing at nothing.
+  -- The offset is the banner/hint block, which format_messages knows nothing about.
+  for i = 1, #msg_rows do
+    msg_rows[i] = msg_rows[i] + header_offset
+  end
+  image.apply(image.plan(messages, msg_rows), bufnr, winnr)
 
   if not win_valid then return end
 

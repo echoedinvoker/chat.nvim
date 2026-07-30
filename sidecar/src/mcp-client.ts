@@ -7,6 +7,8 @@ import type {
   McpSearchResultItem,
   Message,
   ReadMessagesResult,
+  MediaState,
+  MediaResult,
 } from "./types.ts";
 
 const DEFAULT_SOCKET = `${process.env.HOME}/.local/share/chatmux/chatmux.sock`;
@@ -79,10 +81,17 @@ export class McpClient {
     });
     const parsed = this.parseToolContent(raw);
 
+    const rows = parsed.messages as McpMessageRaw[];
+    // F35: 3s is the whole page's budget, not each image's. Anything still outstanding
+    // when it lapses comes back as `pending` and fills in on the next redraw.
+    const media = await resolvePageMedia(
+      rows,
+      async (id) => this.parseToolContent(await this.callTool("get_media", { message_id: id })),
+      { deadline: Bun.sleep(3000) },
+    );
+
     return {
-      messages: (parsed.messages as McpMessageRaw[]).map((m) =>
-        toMessage(m, params.chat_id)
-      ),
+      messages: rows.map((m) => toMessage(m, params.chat_id, media.get(m.id))),
       banner: historyBanner(parsed.history as McpHistoryRaw | undefined),
       // Compared against `true` explicitly, so a missing key and an `undefined` both land
       // on false. The conservative direction: losing an "there is older" hint costs a
@@ -343,14 +352,83 @@ export function olderHint(
   return null;
 }
 
-export function toMessage(raw: McpMessageRaw, chatId: string): Message {
+/**
+ * F35: fetches every image on one page, bounded by concurrency and a shared deadline.
+ *
+ * A free function rather than an `McpClient` method on purpose. `callTool` and
+ * `rawRequest` are private and the client's only seam is a unix socket path, so a method
+ * here could only be tested against a live daemon. Taking `fetchOne` as a parameter moves
+ * the part worth testing — the pool and the giving-up — into something a test can drive
+ * with no socket at all.
+ *
+ * The deadline is injected for the same reason: the production budget is a wall-clock
+ * 3s, but a test that waited 3s to prove a straggler gets dropped would be a test nobody
+ * runs. Passing a promise lets the test decide when time is up.
+ *
+ * A message that misses the deadline is simply absent from the map, and `toMessage` reads
+ * that as `pending` — it will be filled in on the next redraw. One slow image must never
+ * hold a page of text hostage.
+ */
+export async function resolvePageMedia(
+  rows: McpMessageRaw[],
+  fetchOne: (id: string) => Promise<MediaResult>,
+  opts: { concurrency?: number; deadline: Promise<unknown> },
+): Promise<Map<string, MediaResult>> {
+  const out = new Map<string, MediaResult>();
+  const targets = rows.filter(
+    (r) => r.content.type === "image" || r.content.type === "sticker",
+  );
+  const concurrency = opts.concurrency ?? 4;
+  // Resolves to a sentinel instead of rejecting, so a lapsed deadline is an ordinary
+  // "no answer" rather than an error every call site would have to catch.
+  const expired = opts.deadline.then(() => TIMED_OUT);
+
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < targets.length) {
+      const row = targets[next++]!;
+      const result = await Promise.race([fetchOne(row.id), expired]);
+      if (result !== TIMED_OUT) out.set(row.id, result as MediaResult);
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, targets.length) }, worker),
+  );
+  return out;
+}
+
+const TIMED_OUT = Symbol("media-deadline");
+
+export function toMessage(
+  raw: McpMessageRaw,
+  chatId: string,
+  media?: MediaResult,
+): Message {
   const retractedAt = raw.retracted_at ?? null;
+  const isMedia = raw.content.type === "image" || raw.content.type === "sticker";
+  // Retraction wins over media: core has already cleared the content, so a cached image
+  // for a retracted message is a leftover, not something to show.
+  const mediaState: MediaState | undefined =
+    retractedAt != null || !isMedia
+      ? undefined
+      : media && "path" in media
+        ? { state: "ready", path: media.path }
+        : media && "unavailable" in media
+          ? { state: "gone" }
+          : { state: "pending" };
 
   let text: string;
   // Retraction placeholder lives here alongside the sticker/image ones: core clears the
   // content on retraction, so without this Lua would render an empty line.
   if (retractedAt != null) {
     text = "[訊息已收回]";
+  } else if (mediaState?.state === "gone") {
+    // R3: a message LINE deleted must say so. Rendering nothing would be indistinguishable
+    // from the plugin being broken — the exact failure shape F33 was.
+    text = raw.content.type === "sticker" ? "[貼圖已不存在於 LINE]" : "[圖片已不存在於 LINE]";
+  } else if (mediaState?.state === "pending") {
+    text = "[圖片載入中…]";
   } else if (raw.content.type === "text") {
     text = raw.content.text ?? "";
   } else if (raw.content.type === "sticker") {
@@ -371,5 +449,7 @@ export function toMessage(raw: McpMessageRaw, chatId: string): Message {
     is_self: false, // daemon doesn't expose this yet; will need to compare sender.id with bot user id
     edited_at: raw.edited_at ?? null,
     retracted_at: retractedAt,
+    content_type: raw.content.type,
+    ...(mediaState ? { media: mediaState } : {}),
   };
 }

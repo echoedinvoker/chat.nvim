@@ -213,6 +213,37 @@ There is deliberately no cached oldest-timestamp: it is
 `state.reset()`. A stale `true` disables `[` for that chat permanently with no error
 anywhere — the hardest failure here to notice.
 
+## Inline images
+
+Stickers and photos render as real images in the message area, via image.nvim on Ghostty's
+Kitty graphics protocol. `lua/chat-nvim/ui/image.lua` is the **only** file that touches
+image.nvim; everything above it deals in specs (`{ id, path, row, height }`), which is what
+makes placement testable without a terminal.
+
+- **Lua never decides wording.** `pending` and `gone` already carry their text from the
+  sidecar (see `docs/sidecar-protocol.md`). The same rule as retraction placeholders, for
+  the same reason: two places writing the same copy is two places for it to drift.
+- **Do not reserve blank lines for an image.** image.nvim reserves the space itself, as
+  virtual lines sized from the height it actually rendered at. Adding real blank lines on
+  top leaves a second gap under every picture exactly as tall as the picture. The
+  temptation to add them comes from assuming virtual lines break `[`'s `preserve_view`
+  because they do not count towards the buffer's line delta — they do not need to.
+  `topline` and `lnum` are buffer line numbers, so restoring `topline + delta` lands on the
+  same content, and virtual lines ride along with the extmark of the line they belong to.
+- **Render after the lines are in place.** image.nvim anchors on an extmark keyed by
+  `buffer:row:col`; an image placed before `nvim_buf_set_lines` is anchored to rows that
+  are about to be replaced.
+- **Clear the previous draw before the next one.** Same reason: a leftover image keeps
+  reserving space at a row that now holds different text.
+- Heights are fixed per content type (`ui/image.lua`), not derived from the image, so a
+  page's layout is known before `magick` has measured anything.
+
+Pinned against image.nvim's installed source rather than its README, because the two
+disagree in ways that matter: `y` is a **0-based buffer row**, `width`/`height` are in
+**terminal cells** not pixels, and `with_virtual_padding = true` implies `inline = true`
+but not the reverse — passing `inline` alone reserves nothing and lands the image on top
+of the text below it.
+
 ## Notification strategy
 
 ### CRITICAL: No cmdline output

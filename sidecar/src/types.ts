@@ -54,7 +54,35 @@ export interface Message {
   edited_at: number | null;
   /** Non-null once retracted. Text is already replaced with a placeholder. */
   retracted_at: number | null;
+  /**
+   * F35: core's own `content.type`, passed through unchanged.
+   *
+   * Lua needs it to size an inline image (a sticker gets fewer rows than a photo). The
+   * alternative — inferring the type from `text` — would make the placeholder wording
+   * load-bearing, and wording changes silently.
+   */
+  content_type: string;
+  /**
+   * F35: where this message's image stands. Absent on non-media messages.
+   *
+   * `ready` carries a local path core has already fetched and cached — Lua renders it
+   * and never touches a URL, a header or a key. `pending` and `gone` carry no path, and
+   * the matching wording is already in `text`: Lua renders what it is given rather than
+   * deciding what "missing" reads like.
+   */
+  media?: MediaState;
 }
+
+/** F35: the three states an image can be in by the time Lua sees it. */
+export type MediaState =
+  | { state: "ready"; path: string }
+  | { state: "pending" }
+  | { state: "gone" };
+
+/** What core's `get_media` answers with, as the sidecar sees it. */
+export type MediaResult =
+  | { path: string; mime: string }
+  | { unavailable: string };
 
 // === MCP tool input params ===
 
