@@ -166,6 +166,32 @@ export interface McpMessageRaw {
   retracted_at?: number | null;
 }
 
+/**
+ * The event tail (F9). `cursor` is opaque: pass it back verbatim, never parse, compare
+ * or do arithmetic on it. Progress is judged by `has_more` and by equality, not by size.
+ */
+export interface ChatmuxEvent {
+  cursor: string;
+  /** Derived by core from current state: `unsend` beats `edit` beats `message`. */
+  type: string;
+  message: McpMessageRaw;
+}
+
+export interface ReadEventsResult {
+  events: ChatmuxEvent[];
+  next_cursor: string;
+  head_cursor: string;
+  has_more: boolean;
+}
+
+export interface ReadEventsError {
+  error: string;
+  detail: string;
+}
+
+/** Errors arrive as data, not as throws — the caller resyncs from head on `invalid_cursor`. */
+export type ReadEventsResponse = ReadEventsResult | ReadEventsError;
+
 export interface McpHistoryRaw {
   state: string;
   reason?: string;

@@ -7,6 +7,7 @@ import type {
   McpSearchResultItem,
   Message,
   ReadMessagesResult,
+  ReadEventsResponse,
   MediaState,
   MediaResult,
 } from "./types.ts";
@@ -82,13 +83,7 @@ export class McpClient {
     const parsed = this.parseToolContent(raw);
 
     const rows = parsed.messages as McpMessageRaw[];
-    // F35: 3s is the whole page's budget, not each image's. Anything still outstanding
-    // when it lapses comes back as `pending` and fills in on the next redraw.
-    const media = await resolvePageMedia(
-      rows,
-      async (id) => this.parseToolContent(await this.callTool("get_media", { message_id: id })),
-      { deadline: Bun.sleep(3000) },
-    );
+    const media = await this.resolveMedia(rows);
 
     return {
       messages: rows.map((m) => toMessage(m, params.chat_id, media.get(m.id))),
@@ -108,6 +103,47 @@ export class McpClient {
         effectiveLimit,
       ),
     };
+  }
+
+  /**
+   * The one entrance to media resolution, shared by the initial load and by the event
+   * tail. `resolvePageMedia` itself stays a free function so it can be tested without a
+   * socket (see its own comment); this wrapper exists because `callTool` is private, so a
+   * caller outside the client cannot build the `fetchOne` it needs.
+   *
+   * F35: 3s is the whole batch's budget, not each image's. Anything still outstanding when
+   * it lapses is simply absent from the map, which `toMessage` reads as `pending`.
+   */
+  async resolveMedia(rows: McpMessageRaw[]): Promise<Map<string, MediaResult>> {
+    return resolvePageMedia(
+      rows,
+      async (id) => this.parseToolContent(await this.callTool("get_media", { message_id: id })),
+      { deadline: Bun.sleep(3000) },
+    );
+  }
+
+  /**
+   * The event tail: "what happened after where I stopped?". Unlike `read_messages`, which
+   * answers with a window of the newest N, this answers with the changes themselves — an
+   * edit or retraction of a message far behind the cursor re-enters at the tail, so a
+   * consumer parked anywhere still receives it. That is the whole reason F9's push path
+   * reads this instead of the resource snapshot.
+   *
+   * `since` is omitted rather than passed as undefined: to core, an absent `since` means
+   * "start from the current head and return no events", which is how a fresh consumer
+   * begins tailing without replaying history.
+   */
+  async readEvents(params: {
+    since?: string;
+    limit?: number;
+  }): Promise<ReadEventsResponse> {
+    const raw = await this.callTool("read_events", {
+      ...(params.since !== undefined && { since: params.since }),
+      ...(params.limit !== undefined && { limit: params.limit }),
+    });
+    // Errors (invalid_cursor) come back as data on purpose: the caller resyncs from head,
+    // and a throw here would make that indistinguishable from a socket failure.
+    return this.parseToolContent(raw) as ReadEventsResponse;
   }
 
   async sendMessage(params: {

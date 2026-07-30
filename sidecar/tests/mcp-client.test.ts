@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll, mock } from "bun:test";
 import { McpClient } from "../src/mcp-client.ts";
 
 describe("McpClient", () => {
@@ -51,5 +51,58 @@ describe("McpClient", () => {
     const result = await client.searchMessages({ query: "test", limit: 5 });
     expect(result).toHaveProperty("messages");
     expect(Array.isArray(result.messages)).toBe(true);
+  });
+});
+
+/**
+ * Event tail (F9). Fully mocked: what matters here is that `read_events` is called with
+ * the cursor the caller asked for and that an error response comes back as data, not as
+ * a throw. The daemon-backed checks live in the describe block above.
+ */
+describe("McpClient event tail", () => {
+  // ⚠️ Shape must be { result: { content: [...] } } — parseToolContent reads
+  // response.result.content, so a missing `result` throws instead of parsing.
+  const wrap = (payload: unknown) => ({
+    result: { content: [{ type: "text", text: JSON.stringify(payload) }] },
+  });
+
+  test("readEvents calls the read_events tool and passes the cursor through", async () => {
+    const client = new McpClient("/nonexistent.sock");
+    const callTool = mock(() => Promise.resolve(wrap({
+      events: [], next_cursor: "evt:7", head_cursor: "evt:7", has_more: false,
+    })));
+    (client as any).callTool = callTool;
+
+    const res = await client.readEvents({ since: "evt:5" });
+
+    expect(callTool).toHaveBeenCalledWith("read_events", { since: "evt:5" });
+    expect("error" in res).toBe(false);
+    if ("error" in res) throw new Error("unreachable");
+    expect(res.next_cursor).toBe("evt:7");
+    expect(res.has_more).toBe(false);
+  });
+
+  test("readEvents omits since when starting fresh", async () => {
+    const client = new McpClient("/nonexistent.sock");
+    const callTool = mock(() => Promise.resolve(wrap({
+      events: [], next_cursor: "evt:9", head_cursor: "evt:9", has_more: false,
+    })));
+    (client as any).callTool = callTool;
+
+    await client.readEvents({});
+
+    expect(callTool).toHaveBeenCalledWith("read_events", {});
+  });
+
+  test("an error response is returned as-is, not thrown", async () => {
+    const client = new McpClient("/nonexistent.sock");
+    (client as any).callTool = mock(() => Promise.resolve(wrap({
+      error: "invalid_cursor", detail: "not a cursor issued by this core: evt:9",
+    })));
+
+    const res = await client.readEvents({ since: "evt:9" });
+
+    // The caller has to branch on this to resync from head, so it must not throw here.
+    expect("error" in res).toBe(true);
   });
 });

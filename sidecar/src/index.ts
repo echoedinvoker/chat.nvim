@@ -82,6 +82,10 @@ async function main(): Promise<void> {
 
   await subMgr.subscribeDefaults();
 
+  // Order matters: the poll starts before the SSE stream, so even if the subscription never
+  // connects, correctness is already covered. The stream is a latency hint on top of it.
+  subMgr.startPollLoop();
+
   subMgr.startSseLoop().catch((err) => {
     console.error("[sidecar] SSE error:", err);
     emitNotification("disconnected", { reason: String(err) });
