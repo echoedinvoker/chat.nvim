@@ -436,6 +436,19 @@ export async function resolvePageMedia(
 
 const TIMED_OUT = Symbol("media-deadline");
 
+// Message ids are "<platform>:<id>". Only the platforms with a conventional
+// capitalisation are spelled out; anything else is shown as-is, which is wrong
+// in a small way rather than wrong in a misleading way.
+const PLATFORM_LABELS: Record<string, string> = {
+  line: "LINE",
+  telegram: "Telegram",
+};
+
+function platformLabel(messageId: string): string {
+  const platform = messageId.split(":")[0] ?? "";
+  return PLATFORM_LABELS[platform] ?? platform;
+}
+
 export function toMessage(
   raw: McpMessageRaw,
   chatId: string,
@@ -460,9 +473,14 @@ export function toMessage(
   if (retractedAt != null) {
     text = "[訊息已收回]";
   } else if (mediaState?.state === "gone") {
-    // R3: a message LINE deleted must say so. Rendering nothing would be indistinguishable
-    // from the plugin being broken — the exact failure shape F33 was.
-    text = raw.content.type === "sticker" ? "[貼圖已不存在於 LINE]" : "[圖片已不存在於 LINE]";
+    // R3: a message the platform deleted must say so. Rendering nothing would be
+    // indistinguishable from the plugin being broken — the exact failure shape F33 was.
+    // Name the platform the message actually came from: telling someone their Telegram
+    // photo is gone from LINE reads as a bug in the plugin, not as an explanation.
+    const label = platformLabel(raw.id);
+    text = raw.content.type === "sticker"
+      ? `[貼圖已不存在於 ${label}]`
+      : `[圖片已不存在於 ${label}]`;
   } else if (mediaState?.state === "pending") {
     text = "[圖片載入中…]";
   } else if (raw.content.type === "text") {

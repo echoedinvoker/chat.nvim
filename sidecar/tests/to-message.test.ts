@@ -150,19 +150,54 @@ describe("toMessage — 媒體三態（F35）", () => {
     expect(m.media).toEqual({ state: "ready", path: "/c/line/msg/m1.jpg" });
   });
 
-  test("LINE 端已刪時明說，不留空白", () => {
+  test("平台端已刪時明說，不留空白", () => {
     const m = toMessage(raw({ content: { type: "image" } }), "telegram:-100123", {
       unavailable: "gone",
     });
     expect(m.media).toEqual({ state: "gone" });
-    expect(m.text).toBe("[圖片已不存在於 LINE]");
+    expect(m.text).toBe("[圖片已不存在於 Telegram]");
   });
 
   test("貼圖用貼圖的說法", () => {
     const m = toMessage(raw({ content: { type: "sticker", sticker_id: "1" } }), "telegram:-100123", {
       unavailable: "gone",
     });
-    expect(m.text).toBe("[貼圖已不存在於 LINE]");
+    expect(m.text).toBe("[貼圖已不存在於 Telegram]");
+  });
+
+  test("gone wording names the message's own platform", () => {
+    const tg = toMessage(
+      raw({ id: "telegram:21944", content: { type: "image" } }),
+      "telegram:-100123",
+      { unavailable: "gone" },
+    );
+    expect(tg.text).not.toContain("LINE");
+    expect(tg.text).toContain("Telegram");
+
+    const line = toMessage(
+      raw({ id: "line:623174375235650150", content: { type: "image" } }),
+      "line:u1",
+      { unavailable: "gone" },
+    );
+    expect(line.text).toBe("[圖片已不存在於 LINE]");
+  });
+
+  test("gone wording for stickers is platform-aware too", () => {
+    const tg = toMessage(
+      raw({ id: "telegram:21945", content: { type: "sticker" } }),
+      "telegram:-100123",
+      { unavailable: "gone" },
+    );
+    expect(tg.text).toBe("[貼圖已不存在於 Telegram]");
+  });
+
+  test("an unknown platform is named as-is rather than mislabelled", () => {
+    const m = toMessage(
+      raw({ id: "slack:C123", content: { type: "image" } }),
+      "slack:C123",
+      { unavailable: "gone" },
+    );
+    expect(m.text).toBe("[圖片已不存在於 slack]");
   });
 
   test("還沒回來時是載入中，不是壞了", () => {
