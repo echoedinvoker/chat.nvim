@@ -83,6 +83,15 @@ async function main(): Promise<void> {
   // emitter, not a new notification kind — a second delivery route would be a second thing
   // that can drift out of step with F34's anchoring and F35's extmarks.
   client.setLateMediaHandler((method, params) => {
+    // stderr, so it lands in chat-nvim.log: this push is otherwise invisible. Lua's
+    // log_latency() only records pushes that *add* messages, and a late image adds none —
+    // it changes media on rows already on screen. Without this line, "the images appeared"
+    // and "the redraw was pushed" cannot be told apart, which is exactly the confusion F43
+    // was born from (scrolling also made them appear).
+    const count = Array.isArray((params as { messages?: unknown[] }).messages)
+      ? (params as { messages: unknown[] }).messages.length
+      : 0;
+    console.error(`[sidecar] late media: ${count} image(s) for ${params.uri}`);
     emitNotification(method, params);
   });
 

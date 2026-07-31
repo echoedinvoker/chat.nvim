@@ -103,6 +103,7 @@ Every state's wording is decided in the sidecar, not in Lua. Lua renders what it
 | Retracted (wins over everything) | absent | `[訊息已收回]` |
 | Cached and ready | `ready` | unchanged (`[sticker:pkg/id]` / `[image]`) |
 | Not fetched yet, or the page's 3s budget lapsed | `pending` | `[圖片載入中…]` |
+| — any of the above, when the media message also carries text (F44) | unchanged | the caption is appended after the placeholder, one space between: `[image] 今天的貓`. Retraction is the exception: `[訊息已收回]` never gains a caption, because core has cleared the content |
 | Deleted on the platform's side | `gone` | `[圖片已不存在於 <平台>]` / `[貼圖已不存在於 <平台>]` — the platform is read off the message's own id, so a Telegram photo says Telegram |
 | Not media at all (`video` / `audio` / `file`) | absent | `[video]` etc., unchanged |
 
@@ -112,8 +113,23 @@ the failure shape this project keeps rediscovering.
 
 `pending` is not an error either. One page resolves its images with at most 4 requests in
 flight against a single 3s budget for the whole page; anything still outstanding when the
-budget lapses comes back as `pending` and fills in on the next redraw. One slow image
-must never hold a page of text hostage.
+budget lapses comes back as `pending`. One slow image must never hold a page of text hostage.
+
+**A `pending` image resolves itself (F43).** The stragglers keep being fetched in the
+background, and when they land the sidecar pushes one `resource_updated` for that chat
+carrying only those messages — the same notification the event tail uses, so Lua's existing
+`handle_resource_updated` turns it into one redraw. `state.differs()` compares `media.state`
+and `media.path` explicitly, so `pending → ready` is a redraw trigger in its own right.
+
+⚠️ This paragraph used to end "…and fills in on the next redraw", which was wishful: nothing
+ever triggered one. A cold page stayed on `[圖片載入中…]` indefinitely and the only thing that
+helped was scrolling away and back (second render, local cache). Waiting — the one thing a
+user naturally does — was the one thing that could not work. The push is what makes the
+sentence true.
+
+The push arrives once the **whole** batch finishes, not progressively, so a page of many
+images appears all at once (47 images took 38s in the F43 acceptance run). That is a known
+simplification, not a resolved question — see F46 in the project note.
 
 ### Paging fields
 

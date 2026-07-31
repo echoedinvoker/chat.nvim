@@ -80,7 +80,7 @@ Sidecar subscribes to `chat://chats` and `chat://status` on startup. Dynamically
 
 1. NEVER use `vim.notify()`, `nvim_echo()`, or `print()` for user-facing messages — multi-message calls trigger "Press ENTER" prompt. Use virtual text, extmarks, floating windows, or statusline
 2. NEVER use MCPHub.nvim — it doesn't support unix socket transport or per-resource subscription
-3. NEVER render images/stickers — use `[sticker:pkg/id]` or `[image]` text placeholders
+3. ~~NEVER render images/stickers~~ — **overturned by F35 (2026-07)**: images and stickers now render inline via image.nvim. What survives of the rule is narrower and still absolute: NEVER produce placeholder wording in Lua. The sidecar's `toMessage` is the single place that decides it (`[image]`, `[圖片載入中…]`, `[圖片已不存在於 <平台>]`, and since F44 the caption appended to them). Two Lua-side placeholder branches existed once and were deleted on 2026-07-29 — do not revive them
 4. NEVER import chatmux internals — sidecar communicates only via MCP over unix socket
 5. NEVER use `vim.loop.now()` for latency measurement — it's a monotonic clock with arbitrary epoch, not comparable with `Date.now()`. Use `vim.loop.gettimeofday()` and convert to epoch ms
 6. NEVER compare JSON `null` fields with `== nil` in Lua — `vim.json.decode` converts JSON `null` to `vim.NIL` (a userdata sentinel), not Lua `nil`. Use `obj.field == nil or obj.field == vim.NIL` or a helper like `is_notification()`

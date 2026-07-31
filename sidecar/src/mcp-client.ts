@@ -480,6 +480,13 @@ function itemTimeout(ms: number): { promise: Promise<typeof TIMED_OUT>; cancel: 
  * Now the images that arrive after the snapshot come back through `onLate`, and the caller
  * turns that into exactly one redraw.
  *
+ * ⚠️ Contract: every row must belong to the SAME chat. The returned map is keyed on
+ * `McpMessageRaw.id`, which is `<platform>:<platform_message_id>` and carries no chat — the
+ * very key F45 was about. Telegram restarts message ids per dialog, so feeding this two
+ * chats' rows would let one chat's picture be handed to the other's message. A caller with
+ * rows from several chats must group first and keep one map per chat, the way
+ * `SubscriptionManager.pushEvents` does.
+ *
  * Note the two timeouts do different jobs. The page deadline decides *when the user gets a
  * screen*; the per-item timeout decides *when a worker slot is reclaimed*. Racing only the
  * page deadline would drop results that arrive later (F43's whole point); awaiting `fetchOne`
