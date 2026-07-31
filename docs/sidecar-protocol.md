@@ -103,7 +103,7 @@ Every state's wording is decided in the sidecar, not in Lua. Lua renders what it
 | Retracted (wins over everything) | absent | `[訊息已收回]` |
 | Cached and ready | `ready` | unchanged (`[sticker:pkg/id]` / `[image]`) |
 | Not fetched yet, or the page's 3s budget lapsed | `pending` | `[圖片載入中…]` |
-| Deleted on LINE's side | `gone` | `[圖片已不存在於 LINE]` / `[貼圖已不存在於 LINE]` |
+| Deleted on the platform's side | `gone` | `[圖片已不存在於 <平台>]` / `[貼圖已不存在於 <平台>]` — the platform is read off the message's own id, so a Telegram photo says Telegram |
 | Not media at all (`video` / `audio` / `file`) | absent | `[video]` etc., unchanged |
 
 The `gone` row is the point of the whole table. A message the platform deleted has to say
