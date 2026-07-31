@@ -83,7 +83,7 @@ export class McpClient {
     const parsed = this.parseToolContent(raw);
 
     const rows = parsed.messages as McpMessageRaw[];
-    const media = await this.resolveMedia(rows);
+    const media = await this.resolveMedia(rows, params.chat_id);
 
     return {
       messages: rows.map((m) => toMessage(m, params.chat_id, media.get(m.id))),
@@ -114,10 +114,16 @@ export class McpClient {
    * F35: 3s is the whole batch's budget, not each image's. Anything still outstanding when
    * it lapses is simply absent from the map, which `toMessage` reads as `pending`.
    */
-  async resolveMedia(rows: McpMessageRaw[]): Promise<Map<string, MediaResult>> {
+  async resolveMedia(rows: McpMessageRaw[], chatId: string): Promise<Map<string, MediaResult>> {
     return resolvePageMedia(
       rows,
-      async (id) => this.parseToolContent(await this.callTool("get_media", { message_id: id })),
+      async (id) =>
+        this.parseToolContent(
+          // F45: a message id names a message only together with its chat. Without this,
+          // core matches whichever row it finds first and can answer with — or permanently
+          // remember — a different chat's message.
+          await this.callTool("get_media", { message_id: id, chat_id: chatId }),
+        ),
       { deadline: Bun.sleep(3000) },
     );
   }

@@ -100,3 +100,35 @@ describe("readMessages 透出 older_hint", () => {
     expect(r.older_hint).toBe("── 已載入本機全部；更舊的是否存在未知 ──");
   });
 });
+
+describe("readMessages 把聊天室帶進 get_media（F45）", () => {
+  test("read_messages passes the chat down to get_media (F45)", async () => {
+    const calls: any[] = [];
+    const c = new McpClient();
+    // @ts-expect-error — 覆寫 private 往返，測翻譯層（同 clientReturning）
+    c.callTool = async (name: string, params: unknown) => {
+      if (name === "get_media") {
+        calls.push(params);
+        return { result: { content: [{ type: "text", text: JSON.stringify({ path: "/c/x.jpg", mime: "image/jpeg" }) }] } };
+      }
+      return {
+        result: { content: [{ type: "text", text: JSON.stringify({
+          messages: [{
+            id: "telegram:19245",
+            chat_id: "telegram:-1001782953277",
+            sender: { id: "telegram:u1", display_name: "A" },
+            timestamp: 1_700_000_000_000,
+            content: { type: "image" },
+          }],
+          has_more: false,
+        }) }] },
+      };
+    };
+
+    await c.readMessages({ chat_id: "telegram:-1001782953277" });
+
+    expect(calls).toHaveLength(1);
+    expect((calls[0] as any).chat_id).toBe("telegram:-1001782953277");
+    expect((calls[0] as any).message_id).toBe("telegram:19245");
+  });
+});

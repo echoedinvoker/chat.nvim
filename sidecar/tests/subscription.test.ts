@@ -773,6 +773,54 @@ describe("SubscriptionManager", () => {
       .flatMap((n) => (n.params.messages as any[]).map((m) => m.text));
     expect(texts).toEqual(["失敗之後仍然收得到"]);
   });
+
+  test("the event tail resolves media per chat, not in one cross-chat batch (F45)", async () => {
+    const seen: Array<{ ids: string[]; chatId: string }> = [];
+    const mediaEvent = (cursor: string, chatId: string, id: string) => ({
+      cursor,
+      type: "message",
+      message: {
+        id, chat_id: chatId,
+        sender: { id: "telegram:u1", display_name: "x" },
+        timestamp: 1_700_000_000_000,
+        content: { type: "image" },
+        edited_at: null, retracted_at: null,
+      },
+    });
+    const client = createTailClient({
+      readEvents: mock(() => Promise.resolve({
+        events: [
+          mediaEvent("evt:101", "telegram:-100A", "telegram:19245"),
+          mediaEvent("evt:102", "telegram:-100B", "telegram:19245"),
+        ],
+        next_cursor: "evt:102", head_cursor: "evt:102", has_more: false,
+      })),
+      // Both chats answer the same id with a different image — an implementation that
+      // merges them into one map gives itself away here.
+      resolveMedia: mock((rows: any[], chatId: string) => {
+        seen.push({ ids: rows.map((r) => r.id), chatId });
+        return Promise.resolve(new Map(
+          rows.map((r) => [r.id, { path: `/c/${chatId}.jpg`, mime: "image/jpeg" }]),
+        ));
+      }),
+    });
+    const mgr = newManager(client);
+    await mgr.subscribeChat("telegram:-100A");
+    await mgr.subscribeChat("telegram:-100B");
+    await mgr._test_pollOnce();
+
+    // One resolution per chat, each carrying its own chat — not one cross-chat batch.
+    expect(seen).toHaveLength(2);
+    expect(seen.map((s) => s.chatId).sort()).toEqual(["telegram:-100A", "telegram:-100B"]);
+    for (const s of seen) expect(s.ids).toEqual(["telegram:19245"]);
+
+    // And each chat is pushed its own image, not the one the other chat resolved.
+    const pushes = notifications.filter((n) => n.method === "resource_updated");
+    const pathOf = (uri: string) => (pushes.find((p) => p.params.uri === uri)!
+      .params.messages as any[])[0].media.path;
+    expect(pathOf("chat://chats/telegram:-100A/messages")).toBe("/c/telegram:-100A.jpg");
+    expect(pathOf("chat://chats/telegram:-100B/messages")).toBe("/c/telegram:-100B.jpg");
+  });
 });
 
 describe("resource pushes carry the history banner", () => {

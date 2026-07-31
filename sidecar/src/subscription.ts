@@ -309,9 +309,24 @@ export class SubscriptionManager {
       .filter((m) =>
         (m.content.type === "image" || m.content.type === "sticker") &&
         m.retracted_at == null);
-    const media = mediaRows.length > 0
-      ? await this.client.resolveMedia(mediaRows)
-      : new Map<string, MediaResult>();
+
+    // F45: resolved per chat, and kept per chat. The tail is global, so one batch would
+    // ask for a message id without saying which chat's message it is — and the map's key
+    // is that same chat-less id, so two chats carrying the same id (routine on Telegram,
+    // where ids restart per dialog) would silently overwrite one another and hand a chat
+    // the other one's picture. Grouping only the media rows, not `byChat` below: that one
+    // holds every event including text edits, and feeding it here would send get_media
+    // requests for messages that have no media.
+    const mediaRowsByChat = new Map<string, McpMessageRaw[]>();
+    for (const row of mediaRows) {
+      const rows = mediaRowsByChat.get(row.chat_id);
+      if (rows) rows.push(row);
+      else mediaRowsByChat.set(row.chat_id, [row]);
+    }
+    const mediaByChat = new Map<string, Map<string, MediaResult>>();
+    for (const [chatId, rows] of mediaRowsByChat) {
+      mediaByChat.set(chatId, await this.client.resolveMedia(rows, chatId));
+    }
 
     const byChat = new Map<string, McpMessageRaw[]>();
     for (const event of events) {
@@ -329,7 +344,8 @@ export class SubscriptionManager {
       const uri = `chat://chats/${chatId}/messages`;
       if (!this.subscribedUris.has(uri)) continue;
 
-      const messages = rows.map((m) => toMessage(m, chatId, media.get(m.id)));
+      const media = mediaByChat.get(chatId);
+      const messages = rows.map((m) => toMessage(m, chatId, media?.get(m.id)));
       // Same computation the resource path uses, kept because msg_timestamp feeds the
       // latency instrumentation in Lua's log_latency() — dropping it here would halve
       // that measurement with no error to show for it.
