@@ -216,10 +216,11 @@ function M._chat_search(query)
   sidecar.send("search_messages", { query = query }, function(result, err)
     vim.schedule(function()
       if err then return end
-      if not result or not result.messages then return end
+      if not result or not result.results then return end
       -- Show search results in quickfix
       local items = {}
-      for _, msg in ipairs(result.messages) do
+      for _, hit in ipairs(result.results) do
+        local msg = hit.message
         local sender = msg.sender_name or "unknown"
         if sender == vim.NIL then sender = "unknown" end
         -- Search results come through the same `toMessage` as the message list

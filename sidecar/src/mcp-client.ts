@@ -6,6 +6,7 @@ import type {
   McpSendResult,
   McpSearchResultItem,
   Message,
+  SearchResultOut,
   ReadMessagesResult,
   ReadEventsResponse,
   MediaState,
@@ -213,19 +214,55 @@ export class McpClient {
     };
   }
 
+  /**
+   * A search hit is a message *plus* the reason it is a hit. Translating it down to just
+   * the message throws away the snippet — the one thing the results panel is made of —
+   * and the chat name. The same shape of loss as F34's dropped `has_more`.
+   */
   async searchMessages(params: {
     query: string;
     platform?: string;
     chat_id?: string;
     limit?: number;
-  }): Promise<{ messages: Message[] }> {
+    offset?: number;
+  }): Promise<{ results: SearchResultOut[]; total: number }> {
     const raw = await this.callTool("search_messages", params);
     const parsed = this.parseToolContent(raw);
 
     return {
-      messages: (parsed.results as McpSearchResultItem[]).map((r) =>
-        toMessage(r.message, r.message.chat_id)
-      ),
+      results: (parsed.results as McpSearchResultItem[]).map((r) => ({
+        message: toMessage(r.message, r.message.chat_id),
+        snippet: r.snippet,
+        chat_name: r.chat_name ?? null,
+      })),
+      total: typeof parsed.total === "number" ? parsed.total : 0,
+    };
+  }
+
+  /**
+   * One attachment, fetched because the reader asked for it.
+   *
+   * Unlike the image pipeline, which resolves a whole page speculatively, this is driven
+   * by a keypress: a video is only worth the round trip once someone wants to watch it.
+   */
+  async fetchMedia(params: { chat_id: string; message_id: string }): Promise<
+    { path: string } | { unavailable: string; text: string }
+  > {
+    const parsed = this.parseToolContent(
+      // F45: chat_id is not optional. A Telegram message id names a message only
+      // together with its chat, and core will otherwise match — and permanently
+      // remember — a different chat's row.
+      await this.callTool("get_media", {
+        message_id: params.message_id,
+        chat_id: params.chat_id,
+      }),
+    ) as { path?: string; unavailable?: string };
+
+    if (parsed.path) return { path: parsed.path };
+    const reason = parsed.unavailable ?? "unknown";
+    return {
+      unavailable: reason,
+      text: attachmentUnavailableText(reason, params.message_id),
     };
   }
 
@@ -564,9 +601,42 @@ const PLATFORM_LABELS: Record<string, string> = {
   telegram: "Telegram",
 };
 
+/**
+ * What a non-image attachment says on the line where its body would be.
+ *
+ * Type only. Neither platform gives us anything richer: core's `formatMessage` does not
+ * expose `raw`, `messages` has no `file_name` column, and the `attachments` table is an
+ * empty schema nothing writes to. A file name or size here would be invented.
+ */
+const ATTACHMENT_LABEL: Record<string, string> = {
+  video: "[影片]",
+  audio: "[語音]",
+  file: "[檔案]",
+};
+
 function platformLabel(messageId: string): string {
   const platform = messageId.split(":")[0] ?? "";
   return PLATFORM_LABELS[platform] ?? platform;
+}
+
+/**
+ * Why an attachment could not be handed over, in words the panel can show.
+ *
+ * Lives next to the other placeholders for the same reason they do: one origin. Lua
+ * composing its own version of "gone" is how two vocabularies for the same state start.
+ */
+function attachmentUnavailableText(reason: string, messageId: string): string {
+  const label = platformLabel(messageId);
+  switch (reason) {
+    case "gone":
+      return `[附件已不存在於 ${label}]`;
+    case "needs_key":
+      return "[附件無法解密]";
+    case "unsupported_type":
+      return "[這個型別無法取得]";
+    default:
+      return "[附件取得失敗]";
+  }
 }
 
 export function toMessage(
@@ -575,11 +645,19 @@ export function toMessage(
   media?: MediaResult,
 ): Message {
   const retractedAt = raw.retracted_at ?? null;
-  const isMedia = raw.content.type === "image" || raw.content.type === "sticker";
+  // Named for what it actually gates: the inline-image pipeline. Video, audio and files
+  // are attachments too, but they are opened externally and must never be handed to
+  // image.nvim, so they deliberately stay out of this one.
+  const isImageLike =
+    raw.content.type === "image" || raw.content.type === "sticker";
+  const isAttachment =
+    raw.content.type === "video" ||
+    raw.content.type === "audio" ||
+    raw.content.type === "file";
   // Retraction wins over media: core has already cleared the content, so a cached image
   // for a retracted message is a leftover, not something to show.
   const mediaState: MediaState | undefined =
-    retractedAt != null || !isMedia
+    retractedAt != null || !isImageLike
       ? undefined
       : media && "path" in media
         ? { state: "ready", path: media.path }
@@ -610,6 +688,10 @@ export function toMessage(
     text = `[sticker:${c.package_id ?? "?"}/${c.sticker_id ?? "?"}]`;
   } else if (raw.content.type === "image") {
     text = "[image]";
+  } else if (isAttachment) {
+    // Wording lives here, not in Lua: the same single-origin rule as the sticker, image
+    // and retraction placeholders above.
+    text = ATTACHMENT_LABEL[raw.content.type]!;
   } else {
     text = `[${raw.content.type}]`;
   }
@@ -618,7 +700,7 @@ export function toMessage(
   // than being dropped. No branch above read it: before F40.2 a media message could not carry
   // text at all, so there was nothing to read. Retraction is the one exception — core clears
   // the content, and "[訊息已收回] <caption>" would be showing what was withdrawn.
-  if (retractedAt == null && isMedia) {
+  if (retractedAt == null && (isImageLike || isAttachment)) {
     const caption = (raw.content.text ?? "").trim();
     if (caption) text = `${text} ${caption}`;
   }

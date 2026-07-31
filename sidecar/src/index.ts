@@ -25,6 +25,7 @@ const METHODS: Set<RequestMethod> = new Set([
   "search_messages",
   "get_status",
   "close_chat",
+  "fetch_media",
 ]);
 
 export async function dispatch(
@@ -48,6 +49,10 @@ export async function dispatch(
       return client.sendMessage(req.params as any);
     case "search_messages":
       return client.searchMessages(req.params as any);
+    case "fetch_media":
+      return client.fetchMedia(
+        req.params as { chat_id: string; message_id: string },
+      );
     case "get_status":
       return client.getStatus();
     case "close_chat": {

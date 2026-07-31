@@ -297,3 +297,29 @@ describe("resolvePageMediaStreaming (F35 的併發與放生行為不變)", () =>
     expect(out.size).toBe(9);
   });
 });
+
+describe("toMessage renders non-image attachments", () => {
+  const attachment = (type: string, text?: string) =>
+    raw({ content: { type, ...(text ? { text } : {}) } as any });
+
+  test.each([
+    ["video", "[影片]"],
+    ["audio", "[語音]"],
+    ["file", "[檔案]"],
+  ])("renders %s as %s", (type, expected) => {
+    expect(toMessage(attachment(type), "telegram:-100123").text).toBe(expected);
+  });
+
+  test("an attachment caption is part of what was said", () => {
+    const msg = toMessage(attachment("video", "看這個"), "telegram:-100123");
+    expect(msg.text).toBe("[影片] 看這個");
+  });
+
+  test("an attachment must not claim image media state", () => {
+    // Lua's image.plan draws anything with media.state == "ready"; a video handed the
+    // image path would be rendered as a still by image.nvim, or fail silently.
+    const msg = toMessage(attachment("video"), "telegram:-100123");
+    expect(msg.media).toBeUndefined();
+    expect(msg.content_type).toBe("video");
+  });
+});

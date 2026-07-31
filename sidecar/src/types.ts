@@ -12,7 +12,8 @@ export type RequestMethod =
   | "send_message"
   | "search_messages"
   | "get_status"
-  | "close_chat";
+  | "close_chat"
+  | "fetch_media";
 
 export interface Response {
   id: number;
@@ -129,6 +130,7 @@ export interface SearchMessagesParams {
   platform?: string;
   chat_id?: string;
   limit?: number;
+  offset?: number;
 }
 
 export interface CloseChatParams {
@@ -208,5 +210,18 @@ export interface McpSendResult {
 export interface McpSearchResultItem {
   message: McpMessageRaw;
   snippet: string;
-  chat_name: string;
+  // core reads this from `chats.name`, which is nullable — a chat the platform never
+  // named comes back with no name at all.
+  chat_name: string | null;
+}
+
+/**
+ * One search hit as the UI needs it: the translated message, plus the two fields that
+ * only exist in a search result. `snippet` is what the panel shows instead of the body,
+ * and `chat_name` is what tells the reader which conversation it came from.
+ */
+export interface SearchResultOut {
+  message: Message;
+  snippet: string;
+  chat_name: string | null;
 }
