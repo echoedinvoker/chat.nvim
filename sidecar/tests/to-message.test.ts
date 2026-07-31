@@ -217,14 +217,59 @@ describe("toMessage — 媒體三態（F35）", () => {
   });
 });
 
+// ── F44：媒體訊息的 caption ─────────────────────────────────────────
+// 疊在既有的 raw() 上，不另造一套訊息建構邏輯。
+const mediaRow = (over: Partial<McpMessageRaw> = {}) =>
+  raw({
+    id: "telegram:21966", chat_id: "telegram:-100A",
+    content: { type: "image", text: "F40 S3 已編輯的 caption" } as any,
+    ...over,
+  });
+
+describe("toMessage shows a media message's caption (F44)", () => {
+  test("a ready image shows its caption", () => {
+    const m = toMessage(mediaRow(), "telegram:-100A", { path: "/c/x.jpg", mime: "image/jpeg" });
+    expect(m.text).toBe("[image] F40 S3 已編輯的 caption");
+  });
+
+  test("a pending image shows its caption too", () => {
+    const m = toMessage(mediaRow(), "telegram:-100A", undefined);
+    expect(m.text).toBe("[圖片載入中…] F40 S3 已編輯的 caption");
+  });
+
+  test("a gone image shows its caption too", () => {
+    const m = toMessage(mediaRow(), "telegram:-100A", { unavailable: "gone" });
+    expect(m.text).toBe("[圖片已不存在於 Telegram] F40 S3 已編輯的 caption");
+  });
+
+  test("a retracted media message says only that it was retracted", () => {
+    const m = toMessage(mediaRow({ retracted_at: 123 }), "telegram:-100A", undefined);
+    expect(m.text).toBe("[訊息已收回]");
+  });
+
+  test("an empty caption adds nothing", () => {
+    const m = toMessage(
+      mediaRow({ content: { type: "image", text: "  " } as any }),
+      "telegram:-100A",
+      { path: "/c/x.jpg", mime: "image/jpeg" },
+    );
+    expect(m.text).toBe("[image]");
+  });
+
+  test("a text message is untouched", () => {
+    const m = toMessage(raw(), "telegram:-100123");
+    expect(m.text).toBe("原始內容");
+  });
+});
+
 // ── F35 Phase 5.2：一頁內解析媒體（併發上限 4、總預算 3s）─────────────
 const rows = (n: number) =>
   Array.from({ length: n }, (_, i) => ({ id: `line:m${i}`, content: { type: "image" } }) as any);
 
-describe("resolvePageMedia", () => {
+describe("resolvePageMediaStreaming (F35 的併發與放生行為不變)", () => {
   test("keeps at most 4 requests in flight", async () => {
     let inFlight = 0, peak = 0;
-    const out = await resolvePageMedia(rows(10), async (id) => {
+    const out = await resolvePageMediaStreaming(rows(10), async (id) => {
       inFlight++; peak = Math.max(peak, inFlight);
       await Bun.sleep(10);
       inFlight--;

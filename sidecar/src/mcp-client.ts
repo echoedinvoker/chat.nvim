@@ -500,6 +500,15 @@ export function toMessage(
     text = `[${raw.content.type}]`;
   }
 
+  // A photo's caption is part of what was said, so it belongs next to the placeholder rather
+  // than being dropped. No branch above read it: before F40.2 a media message could not carry
+  // text at all, so there was nothing to read. Retraction is the one exception — core clears
+  // the content, and "[訊息已收回] <caption>" would be showing what was withdrawn.
+  if (retractedAt == null && isMedia) {
+    const caption = (raw.content.text ?? "").trim();
+    if (caption) text = `${text} ${caption}`;
+  }
+
   return {
     id: raw.id,
     chat_id: raw.chat_id ?? chatId,
