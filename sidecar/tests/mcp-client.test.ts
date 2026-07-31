@@ -148,6 +148,24 @@ describe("McpClient on-demand media", () => {
     expect(out.unavailable).toBe("gone");
     expect(out.text).toContain("Telegram");
   });
+
+  test("a timeout says the fetch ran out of time, never that the file is gone", async () => {
+    // Core reports a timeout separately from "gone" precisely so this wording can differ:
+    // a video that took longer than the deadline has not been deleted, and telling the
+    // reader it has is the has_more mistake (F34) wearing a different hat.
+    const client = new McpClient("/nonexistent.sock");
+    (client as any).callTool = mock(() => Promise.resolve(wrap({ unavailable: "timeout" })));
+
+    const out = await client.fetchMedia({
+      chat_id: "telegram:-100123",
+      message_id: "telegram:100",
+    });
+
+    if (!("unavailable" in out)) throw new Error("unreachable");
+    expect(out.unavailable).toBe("timeout");
+    expect(out.text).not.toContain("不存在");
+    expect(out.text).toContain("逾時");
+  });
 });
 
 describe("McpClient event tail", () => {

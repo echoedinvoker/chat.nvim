@@ -634,6 +634,11 @@ function attachmentUnavailableText(reason: string, messageId: string): string {
       return "[附件無法解密]";
     case "unsupported_type":
       return "[這個型別無法取得]";
+    // Distinct from "gone" on purpose: the fetch ran out of time, which says nothing about
+    // whether the file is still there. Telling the reader it was deleted is the has_more
+    // mistake (F34) in another layer, and here it also hides that retrying would work.
+    case "timeout":
+      return "[附件取得逾時，可再試一次]";
     default:
       return "[附件取得失敗]";
   }
