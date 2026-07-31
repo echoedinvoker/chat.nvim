@@ -172,11 +172,11 @@ function M.setup(opts)
   end, { desc = "Close chatmux UI" })
 end
 
-function M._chat_list()
-  ensure_sidecar()
-
+-- Both entry points open the chat-list pane, so both have to fill it. Shared rather than
+-- copied: :ChatOpen opening a pane that no one had taught to fetch is exactly how it came
+-- to display "No chats found" beside 143 chats.
+local function fetch_chats()
   local chat_list = require("chat-nvim.ui.chat_list")
-  chat_list.open()
 
   sidecar.send("list_chats", {}, function(result, err)
     vim.schedule(function()
@@ -191,10 +191,20 @@ function M._chat_list()
   end)
 end
 
+function M._chat_list()
+  ensure_sidecar()
+
+  local chat_list = require("chat-nvim.ui.chat_list")
+  chat_list.open()
+
+  fetch_chats()
+end
+
 function M._chat_open(chat_id)
   ensure_sidecar()
   local messages_ui = require("chat-nvim.ui.messages")
   messages_ui.open(chat_id)
+  fetch_chats()
 end
 
 function M._chat_send(text)
