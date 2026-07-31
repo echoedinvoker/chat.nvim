@@ -78,6 +78,14 @@ async function main(): Promise<void> {
     emitNotification(method, params);
   });
 
+  // F43: a page's late images announce themselves on the same wire the event tail uses, so
+  // Lua's existing handle_resource_updated turns them into one redraw. Deliberately the same
+  // emitter, not a new notification kind — a second delivery route would be a second thing
+  // that can drift out of step with F34's anchoring and F35's extmarks.
+  client.setLateMediaHandler((method, params) => {
+    emitNotification(method, params);
+  });
+
   emitNotification("connected", {});
 
   await subMgr.subscribeDefaults();

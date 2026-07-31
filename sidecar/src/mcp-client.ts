@@ -61,11 +61,27 @@ export class McpClient {
     return toChatList((parsed ?? {}) as { chats?: McpChatRaw[]; total?: number });
   }
 
+  /**
+   * Where a page's late-arriving images go (F43). Set by index.ts to the same notification
+   * emitter the event tail uses, so a late image reaches Lua through the one redraw path
+   * that F9/F34/F35 already cover — rather than a second, untested delivery route.
+   */
+  private lateMediaHandler?: (method: string, params: Record<string, unknown>) => void;
+
+  setLateMediaHandler(
+    handler: (method: string, params: Record<string, unknown>) => void,
+  ): void {
+    this.lateMediaHandler = handler;
+  }
+
   async readMessages(params: {
     chat_id: string;
     limit?: number;
     before?: number;
     after?: number;
+    /** Injectable page media budget. Production leaves it at 3s; tests pass 0 rather than
+     * spending three real seconds proving the snapshot is taken on time. */
+    media_deadline_ms?: number;
   }): Promise<ReadMessagesResult> {
     // Mirrors core's own `limit ?? 20` (chatmux src/core/mcp/tools.ts:174). Duplicating the
     // number is the lesser evil: olderHint has to name a page size in prose, and reading
@@ -83,7 +99,31 @@ export class McpClient {
     const parsed = this.parseToolContent(raw);
 
     const rows = parsed.messages as McpMessageRaw[];
-    const media = await this.resolveMedia(rows, params.chat_id);
+    const media = await this.resolveMedia(
+      rows,
+      params.chat_id,
+      // F43: the images that miss the page budget used to be simply absent, and the comment
+      // claiming they would be filled in "on the next redraw" was wishful — nothing
+      // triggered one, so a cold page stayed on [圖片載入中…] until the user scrolled away
+      // and back. Now the stragglers push one redraw of their own, carrying only themselves.
+      (late) => {
+        const handler = this.lateMediaHandler;
+        if (!handler) return;
+        const messages = rows
+          .filter((m) => late.has(m.id))
+          .map((m) => toMessage(m, params.chat_id, late.get(m.id)));
+        if (messages.length === 0) return;
+        // Payload shape identical to pushEvents', including the absence of `banner`: Lua
+        // reads a missing banner as "leave it alone", while an empty one would wipe F34's
+        // history line.
+        handler("resource_updated", {
+          uri: `chat://chats/${params.chat_id}/messages`,
+          sidecar_received_at: Date.now(),
+          messages,
+        });
+      },
+      params.media_deadline_ms,
+    );
 
     return {
       messages: rows.map((m) => toMessage(m, params.chat_id, media.get(m.id))),
@@ -107,15 +147,21 @@ export class McpClient {
 
   /**
    * The one entrance to media resolution, shared by the initial load and by the event
-   * tail. `resolvePageMedia` itself stays a free function so it can be tested without a
-   * socket (see its own comment); this wrapper exists because `callTool` is private, so a
-   * caller outside the client cannot build the `fetchOne` it needs.
+   * tail. `resolvePageMediaStreaming` itself stays a free function so it can be tested
+   * without a socket (see its own comment); this wrapper exists because `callTool` is
+   * private, so a caller outside the client cannot build the `fetchOne` it needs.
    *
    * F35: 3s is the whole batch's budget, not each image's. Anything still outstanding when
-   * it lapses is simply absent from the map, which `toMessage` reads as `pending`.
+   * it lapses is absent from the returned map, which `toMessage` reads as `pending` — and
+   * then (F43) arrives through `onLate` once it does resolve.
    */
-  async resolveMedia(rows: McpMessageRaw[], chatId: string): Promise<Map<string, MediaResult>> {
-    return resolvePageMedia(
+  async resolveMedia(
+    rows: McpMessageRaw[],
+    chatId: string,
+    onLate?: (media: Map<string, MediaResult>) => void,
+    deadlineMs?: number,
+  ): Promise<Map<string, MediaResult>> {
+    return resolvePageMediaStreaming(
       rows,
       async (id) =>
         this.parseToolContent(
@@ -124,7 +170,10 @@ export class McpClient {
           // remember — a different chat's message.
           await this.callTool("get_media", { message_id: id, chat_id: chatId }),
         ),
-      { deadline: Bun.sleep(3000) },
+      {
+        deadline: Bun.sleep(deadlineMs ?? 3000),
+        ...(onLate ? { onLate } : {}),
+      },
     );
   }
 
@@ -394,50 +443,108 @@ export function olderHint(
   return null;
 }
 
+/** Per-image ceiling. Unrelated to the page's 3s budget: this one only exists so a request
+ * that never answers cannot hold a worker slot forever. */
+const ITEM_TIMEOUT_MS = 30_000;
+
+/** A timer that resolves to the sentinel and never keeps the process alive by itself. */
+function itemTimeout(ms: number): { promise: Promise<typeof TIMED_OUT>; cancel: () => void } {
+  let handle: ReturnType<typeof setTimeout>;
+  const promise = new Promise<typeof TIMED_OUT>((resolve) => {
+    handle = setTimeout(() => resolve(TIMED_OUT), ms);
+    // Nothing should wait on this timer for its own sake — a page that resolved every image
+    // in 40ms must not keep the sidecar (or a test runner) up for the remaining 30s.
+    (handle as unknown as { unref?: () => void }).unref?.();
+  });
+  return { promise, cancel: () => clearTimeout(handle) };
+}
+
 /**
- * F35: fetches every image on one page, bounded by concurrency and a shared deadline.
+ * F35/F43: fetches every image on one page, bounded by concurrency, and hands back whatever
+ * is ready when the page's deadline lapses — then keeps going in the background.
  *
  * A free function rather than an `McpClient` method on purpose. `callTool` and
  * `rawRequest` are private and the client's only seam is a unix socket path, so a method
  * here could only be tested against a live daemon. Taking `fetchOne` as a parameter moves
- * the part worth testing — the pool and the giving-up — into something a test can drive
- * with no socket at all.
+ * the part worth testing — the pool, the giving-up, and the late hand-back — into something
+ * a test can drive with no socket at all.
  *
  * The deadline is injected for the same reason: the production budget is a wall-clock
  * 3s, but a test that waited 3s to prove a straggler gets dropped would be a test nobody
  * runs. Passing a promise lets the test decide when time is up.
  *
- * A message that misses the deadline is simply absent from the map, and `toMessage` reads
- * that as `pending` — it will be filled in on the next redraw. One slow image must never
- * hold a page of text hostage.
+ * F43 is the difference from the F35 version: back then a missed image was simply absent
+ * from the map, `toMessage` read that as `pending`, and the comment said it would be filled
+ * in "on the next redraw" — which nothing ever triggered. So the first cold page of a chat
+ * stayed on `[圖片載入中…]` forever and waiting was the one action that could not help.
+ * Now the images that arrive after the snapshot come back through `onLate`, and the caller
+ * turns that into exactly one redraw.
+ *
+ * Note the two timeouts do different jobs. The page deadline decides *when the user gets a
+ * screen*; the per-item timeout decides *when a worker slot is reclaimed*. Racing only the
+ * page deadline would drop results that arrive later (F43's whole point); awaiting `fetchOne`
+ * bare would let one request that never answers occupy a slot forever, silently starving
+ * every image queued behind it.
  */
-export async function resolvePageMedia(
+export async function resolvePageMediaStreaming(
   rows: McpMessageRaw[],
   fetchOne: (id: string) => Promise<MediaResult>,
-  opts: { concurrency?: number; deadline: Promise<unknown> },
+  opts: {
+    concurrency?: number;
+    deadline: Promise<unknown>;
+    onLate?: (media: Map<string, MediaResult>) => void;
+    itemTimeoutMs?: number;
+  },
 ): Promise<Map<string, MediaResult>> {
   const out = new Map<string, MediaResult>();
+  const late = new Map<string, MediaResult>();
   const targets = rows.filter(
     (r) => r.content.type === "image" || r.content.type === "sticker",
   );
   const concurrency = opts.concurrency ?? 4;
-  // Resolves to a sentinel instead of rejecting, so a lapsed deadline is an ordinary
-  // "no answer" rather than an error every call site would have to catch.
-  const expired = opts.deadline.then(() => TIMED_OUT);
+  const perItemMs = opts.itemTimeoutMs ?? ITEM_TIMEOUT_MS;
+
+  // Flipped once the caller has been handed its page: results after that point can no longer
+  // reach the screen through the return value, so they go to `late` instead.
+  let snapshotTaken = false;
 
   let next = 0;
   const worker = async (): Promise<void> => {
     while (next < targets.length) {
       const row = targets[next++]!;
-      const result = await Promise.race([fetchOne(row.id), expired]);
-      if (result !== TIMED_OUT) out.set(row.id, result as MediaResult);
+      const timer = itemTimeout(perItemMs);
+      let result: MediaResult | typeof TIMED_OUT;
+      try {
+        result = await Promise.race([fetchOne(row.id), timer.promise]);
+      } catch {
+        // This image failed; the rest of the page has nothing to do with it. Swallowing here
+        // rather than at the pool level is what keeps one rejection from ending the batch —
+        // and, in the background phase, from becoming an unhandled rejection that would take
+        // the sidecar down with it.
+        continue;
+      } finally {
+        timer.cancel();
+      }
+      if (result === TIMED_OUT) continue;
+      (snapshotTaken ? late : out).set(row.id, result as MediaResult);
     }
   };
 
-  await Promise.all(
+  const all = Promise.all(
     Array.from({ length: Math.min(concurrency, targets.length) }, worker),
   );
-  return out;
+
+  await Promise.race([all, opts.deadline]);
+  snapshotTaken = true;
+  const snapshot = new Map(out);
+
+  // Deliberately not awaited: the caller gets its page now, and the stragglers announce
+  // themselves later. `void` so a rejection here can never surface as unhandled.
+  void all.then(() => {
+    if (late.size > 0) opts.onLate?.(late);
+  });
+
+  return snapshot;
 }
 
 const TIMED_OUT = Symbol("media-deadline");

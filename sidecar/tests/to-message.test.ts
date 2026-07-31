@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { toMessage, historyBanner, olderHint, resolvePageMedia } from "../src/mcp-client.ts";
+import { toMessage, historyBanner, olderHint, resolvePageMediaStreaming } from "../src/mcp-client.ts";
 import type { McpMessageRaw } from "../src/types.ts";
 
 function raw(overrides: Partial<McpMessageRaw> = {}): McpMessageRaw {
@@ -284,7 +284,7 @@ describe("resolvePageMediaStreaming (F35 的併發與放生行為不變)", () =>
     let fireDeadline: () => void = () => {};
     const deadline = new Promise<void>((r) => { fireDeadline = r; });
 
-    const p = resolvePageMedia(rows(10), async (id) => {
+    const p = resolvePageMediaStreaming(rows(10), async (id) => {
       if (id === "line:m3") return await new Promise(() => {});   // 永不 resolve
       return { path: `/c/${id}.jpg`, mime: "image/jpeg" };
     }, { concurrency: 4, deadline });

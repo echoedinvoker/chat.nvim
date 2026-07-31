@@ -77,10 +77,25 @@ end
 M.norm = norm
 
 --- Has this message changed in a way the buffer must show?
+---
+--- F43: media is compared explicitly. Before this, a photo going pending → ready was noticed
+--- only because the placeholder text happened to change with it ("[圖片載入中…]" → "[image]")
+--- — the state layer never looked at media at all. That coincidence is not something to
+--- build a redraw on, and F44 weakened it further by appending captions to both wordings.
+local function media_of(m)
+  local media = norm(m.media)
+  if media == nil then return nil, nil end
+  return norm(media.state), norm(media.path)
+end
+
 local function differs(old, new)
+  local old_state, old_path = media_of(old)
+  local new_state, new_path = media_of(new)
   return norm(old.text) ~= norm(new.text)
     or norm(old.edited_at) ~= norm(new.edited_at)
     or norm(old.retracted_at) ~= norm(new.retracted_at)
+    or old_state ~= new_state
+    or old_path ~= new_path
 end
 
 function M.append_messages(chat_id, new_messages)
