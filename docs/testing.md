@@ -110,6 +110,9 @@ run without a daemon by injecting a stub into `package.loaded["chat-nvim.sidecar
 nvim --headless -l scripts/f34-anchor-check.lua; echo "exit=$?"        # prints OK: 6/6
 nvim --headless -l scripts/f35-image-spec-check.lua; echo "exit=$?"    # prints ALL PASS: 16/16
 nvim --headless -l scripts/f9-banner-guard-check.lua; echo "exit=$?"   # prints PASS: 3/3
+nvim --headless -l scripts/f43-media-redraw-check.lua; echo "exit=$?"  # prints ALL PASS
+nvim --headless -l scripts/f36-search-jump-check.lua; echo "exit=$?"   # prints OK: 19/19
+nvim --headless -l scripts/f38-attachment-open-check.lua; echo "exit=$?" # prints OK: 11/11
 ```
 
 `f9-banner-guard-check.lua` stubs only the sidecar and sets `state.current_chat = nil`, so
@@ -123,12 +126,36 @@ one row under its header, at the cached path, at the height its content type cal
 absence (`pending` / `gone` / `video` produce no spec but do print the sidecar's wording),
 and that prepending a page moves every image by exactly the buffer's line delta.
 
+`f36-search-jump-check.lua` covers what a search that only finds what is already on screen
+cannot be distinguished from: that `render_full` records where each message landed
+(including the banner/hint offset), that `load_older`'s completion callback fires exactly
+once down **every** exit — the two-rung ladder, the error path, and the refusals — and that
+the jump reports its three outcomes with wording that never claims a message does not
+exist. It also asserts the panel's row↔result mapping, written as a list rather than a
+table keyed by line: `mapping[1] = nil` is not a key with a nil value in Lua, it is no key
+at all, and `pairs()` would skip exactly the two rows that must have *no* result.
+
+`f38-attachment-open-check.lua` swaps the opener for one that records what it was asked to
+open (same seam as `image.set_renderer`) and asserts the four paths `o` has: a video
+reaches the opener via `fetch_media` with `chat_id` attached, a text line neither fetches
+nor opens, an `unavailable` shows the sidecar's wording and opens nothing, and a second
+press while a fetch is in the air neither re-requests nor re-opens.
+
 **Know what these scripts cannot see.** The fake renderer produces no virtual lines, so
 anything about how much space an image actually occupies on screen is invisible to it. A
 version of this feature reserved real blank lines *and* let image.nvim reserve virtual
 ones, leaving a second gap under every picture the same height as the picture — both
 scripts stayed green throughout, and a person spotted it in seconds. Mechanical assertions
 own placement; a human owns whether the screen looks right.
+
+**A stub replaces the slowest part of the system, so no stubbed script can see time.**
+`f38-attachment-open-check.lua` was green at 7/7 while every uncached Telegram attachment
+failed in real use: the Lua layer expired pending requests after 10s, and fetching one
+takes 14-40s. The stub answered instantly, so the deadline was never exercised. The fix is
+not to make the test wait a minute — it is to make the rule askable: `sidecar._is_stale` is
+a pure function, and the script asserts it directly (default 10s, 60s when the request asks
+for it). **Time-dependent logic has to be a question you can ask, not only something you can
+sit through.**
 
 Conventions for these scripts:
 

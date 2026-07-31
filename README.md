@@ -70,7 +70,7 @@ require("chat-nvim").statusline()  -- "💬 3", "[disconnected]", or ""
 | `:ChatList` | Open the chat list (starts the sidecar on first use) |
 | `:ChatOpen {id}` | Open a chat by ID |
 | `:ChatSend {text}` | Send to the currently open chat |
-| `:ChatSearch {query}` | Full-text search; results land in the quickfix list |
+| `:ChatSearch {query}` | Search the current chat's full history; hits open in a floating panel, `<CR>` jumps to one — paging backwards automatically if it is not loaded yet |
 | `:ChatClose` | Tear down the UI and stop the sidecar |
 
 Keymaps are **buffer-local** — no global mappings are created.
@@ -113,9 +113,23 @@ tools and resources this plugin consumes) or
 
 ## Limitations
 
-- **Images and stickers render inline; other media does not.** Video, audio and files show as
-  `[video]` / `[audio]` / `[file]` labels. The label tells you enough to go look at your phone,
-  and a terminal is a poor player for any of the three.
+- **Images and stickers render inline; other media opens externally.** Video, audio and files
+  show as `[影片]` / `[語音]` / `[檔案]`; `o` on one fetches it and hands it to your desktop's
+  default application. A terminal is a poor player for any of the three, so it does not try to be.
+- **Opening a Telegram attachment takes 15-40 seconds.** The bytes are refetched from the platform
+  rather than kept locally, so the first `o` on any attachment has a real wait. The second is
+  instant — it is cached. LINE attachments land in about a second.
+- **Cached files have no extension.** Everything that is not an image is stored as `.bin`, so what
+  opens it is decided by content sniffing. That works for common types (mp4, pdf, zip, m4a all
+  resolved correctly here) but a viewer that keys on the filename may treat the file as a download
+  rather than opening it — Chromium does this with PDFs.
+- **No filename, size or duration is shown for attachments.** Neither platform provides them
+  through the current pipeline: core does not expose the raw event, `messages` has no `file_name`
+  column, and the `attachments` table is unused. This is a data gap, not a display choice.
+- **Telegram voice messages are indistinguishable from files.** The adapter classifies them as
+  documents, so they show as `[檔案]` and have no voice-specific UI.
+- **Search covers the current chat only.** No cross-chat search; `/` is still native vim search
+  over what is loaded.
 - **Animated stickers show their static frame.** Enough to recognise which sticker it is, which is
   what the line is for. Reconsider if animated stickers become common in your chats, or if
   someone establishes how an APNG behaves under image.nvim — that spike, not the URL handling, is

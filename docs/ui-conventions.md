@@ -74,10 +74,13 @@ another message
 | Chat list | `R` | Refresh chat list |
 | Messages | `c` | Open floating composer |
 | Messages | `[` | Load one page of older messages above the current ones |
+| Messages | `o` | Fetch the attachment under the cursor and hand it to `vim.ui.open`. Only `video` / `audio` / `file`; native `o` is open-line, which in a `modifiable = false` buffer only ever beeped |
 | Messages | `q` | Close messages, return to chat list |
 | Messages | `j/k/gg/G` | Native vim motion (free) |
 | Messages | `/` | Native vim search (free) |
 | Messages | `v + y` | Native visual mode yank (free) |
+| Search panel | `<CR>` | Jump to the hit under the cursor, paging backwards until it is loaded |
+| Search panel | `q` / `<Esc>` | Close the panel, cursor returns to the messages buffer |
 | Composer | `<CR>` | Send message (normal mode) |
 | Composer | `<Esc>` | Cancel / close (normal mode) |
 
@@ -231,6 +234,67 @@ There is deliberately no cached oldest-timestamp: it is
 `state.reset()`. A stale `true` disables `[` for that chat permanently with no error
 anywhere — the hardest failure here to notice.
 
+## Searching the full history
+
+`:ChatSearch {query}` searches the **current chat** through core's `search_messages` (not
+the buffer), so a hit older than what is loaded is reachable. `/` is left alone: it remains
+native vim search over the loaded text.
+
+Results open in a floating panel. Row 1 is the status line; result *n* lives on row *n+1* —
+kept in `_set_results` / `_result_at` rather than as an inline offset, because the offset
+written twice is how `<CR>` ends up jumping to the neighbouring hit, which still reads as
+"it worked".
+
+`<CR>` calls `messages.load_older` in a loop until the target id appears in
+`state.msg_rows`, then parks the cursor on it. Three outcomes, three honest wordings:
+
+| outcome | wording |
+|---|---|
+| found | panel closes, cursor on the message |
+| `state.has_more[chat_id] == false` | "本機已載完這間聊天室，仍未到達該訊息。更舊的訊息是否存在於平台端未知。" |
+| 20 pages walked | "已往回載入 20 頁仍未到達該訊息；本機 DB 仍有更舊訊息。" |
+
+The middle one is load-bearing. `has_more == false` is a fact about **this machine's DB**,
+not about the platform — the same rule `[` follows. Saying "that message does not exist"
+would be inventing a fact about a server nobody asked.
+
+**Why this wording lives in Lua when placeholders live in the sidecar.** The sidecar owns
+text that describes *a message* (`[圖片載入中…]`, `[附件已不存在於 Telegram]`) — it is the
+only place that knows the message's state, so a second copy in Lua could only drift. The
+panel's progress text describes *a loop the sidecar is not part of*: how many pages this
+client has walked, and whether it gave up. Nothing on the other side of the socket knows
+that. The precedent is the chat list's truncation warning.
+
+Snippets arrive in two shapes and the panel must assume neither: the FTS branch wraps hits
+in `<b>…</b>`, while the LIKE branch (query shorter than 3 characters, which is most CJK
+two-character words) hands back the whole `content_text`, unmarked and possibly multi-line.
+`_clean_snippet` strips the markup, folds newlines, and truncates with `strcharpart` —
+`sub()` on bytes would split a CJK character in half.
+
+## Attachments that are not images
+
+`video` / `audio` / `file` render as their sidecar-given label (`[影片]` / `[語音]` /
+`[檔案]`) and are opened on demand with `o`, which fetches the bytes and hands the cached
+path to `vim.ui.open`. They deliberately do **not** go through `image.plan`: `image.lua`
+is for things that belong on screen, and handing a video's bytes to image.nvim is not a
+degraded experience, it is a broken one.
+
+- **Images are not openable with `o`.** They are already visible; an external viewer would
+  be a second, worse way to look at the same thing.
+- **A per-message in-flight guard mirrors `state.in_flight`.** Without it, holding `o`
+  launches the external program once per keypress and the status text overwrites itself.
+  Cleared on every exit including the error path — a stale `true` disables `o` for that
+  attachment for the rest of the session with nothing on screen to say why.
+- **Fetching gets a 60s deadline, not the default 10s.** Measured 2026-07-31: a Telegram
+  refetch takes 14-40s and core waits up to 180s on its adapter. Under the default, every
+  uncached Telegram attachment reported "附件取得失敗" before the real answer — success and
+  honest-unavailable alike — and the only visible symptom was a wrong message.
+- **The cursor is resolved by walking up to the nearest header row**, because that is where
+  a reader's cursor actually is. Reading only the exact row under the cursor passes every
+  header-row test and does nothing in real use.
+- **All status is virtual text on the message's own line.** The cmdline ban applies here as
+  everywhere.
+
 ## Inline images
 
 Stickers and photos render as real images in the message area, via image.nvim on Ghostty's
@@ -255,6 +319,9 @@ makes placement testable without a terminal.
   reserving space at a row that now holds different text.
 - Heights are fixed per content type (`ui/image.lua`), not derived from the image, so a
   page's layout is known before `magick` has measured anything.
+- **Only images and stickers reach `image.plan`.** Video, audio and files take the
+  `attachment.lua` route above. When renaming anything in that area (`isMedia` →
+  `isImageLike`, for one), do not quietly widen it to attachments.
 
 Pinned against image.nvim's installed source rather than its README, because the two
 disagree in ways that matter: `y` is a **0-based buffer row**, `width`/`height` are in

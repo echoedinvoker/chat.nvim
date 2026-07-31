@@ -46,9 +46,55 @@ or on error:
 | `list_chats` | `{platform?, query?, limit?, cursor?}` | `{chats, total, truncated, truncation_banner}` | With no filter and no explicit page, reads the unpaginated `chat://chats` resource so empty chats are not cut off (see below). With any of them, uses the paginated `list_chats` tool. |
 | `read_messages` | `{chat_id, limit?, before?, after?}` | `{messages, banner, has_more, oldest_timestamp, older_hint}` | Reads one page. `before`/`after` are epoch ms; `before` means strictly `timestamp < before`. See [Paging fields](#paging-fields). **Side effect**: sidecar auto-subscribes to this chat's messages resource. |
 | `send_message` | `{chat_id, text}` | `{success: boolean, error?}` | Sends a text message via chatmux daemon. |
-| `search_messages` | `{query, platform?, chat_id?, limit?}` | `{messages: Message[]}` | FTS5 trigram search. |
+| `search_messages` | `{query, platform?, chat_id?, limit?, offset?}` | `{results: SearchResult[], total}` | FTS5 trigram search, with a LIKE fallback below 3 characters. `chat_id` / `platform` are pushed into SQL, not filtered afterwards. |
+| `fetch_media` | `{chat_id, message_id}` | `{path}` or `{unavailable, text}` | One attachment, on demand. `chat_id` is **not** optional — see below. |
 | `get_status` | `{}` | `{daemon: StatusObj}` | Returns daemon + adapter connection status. |
 | `close_chat` | `{chat_id}` | `{}` | Unsubscribes from chat's messages resource. Lua sends this when user navigates away from a chat. |
+
+### SearchResult object
+
+```typescript
+{
+  message: Message
+  snippet: string       // ⚠️ two shapes, see below
+  chat_name: string
+}
+```
+
+`total` is the full number of hits, counted in SQL — not the length of the returned page.
+
+⚠️ **`snippet` is not always marked up or short.** Above 3 characters the query goes through
+FTS5, which returns `…<b>hit</b>…` truncated to 32 tokens. At or below 3 characters — which
+is most CJK two-character words — core falls back to `LIKE` and the snippet is the entire
+`content_text`, with no `<b>` and possibly newlines. A consumer that assumes markup or
+brevity renders a whole paragraph into one row.
+
+The chat and platform filters live in the SQL `WHERE`, in **both** branches. They used to be
+applied in JS after an inner `LIMIT 1000`, which silently removed every hit older than the
+newest thousand across the whole DB — precisely the case chat-scoped search exists for
+(2026-07-31: 3 common single characters exceeded that cap in a 14k-message DB).
+
+### fetch_media
+
+```typescript
+{ path: string }                          // bytes are on disk, cached
+{ unavailable: string, text: string }     // reason + the wording to show
+```
+
+`chat_id` **must** be sent. A Telegram message id names a message only together with its
+chat (`chatmux/docs/platform-facts.md` fact 1); without it core matches a different chat's
+row and remembers the wrong answer permanently.
+
+Reasons: `gone`, `needs_key`, `unsupported_type`, `timeout`. `timeout` is distinct from
+`gone` on purpose — running out of time says nothing about whether the file is still there,
+and reporting it as `gone` both misinformed the reader and poisoned core's negative cache
+for 24 hours, so the retry that would have worked never happened.
+
+`text` is composed **here**, never in Lua. One origin per piece of copy.
+
+Fetching is slow by nature: measured 2026-07-31, a Telegram refetch runs 14-40s (core
+allows its adapter 180s for `get_media`, against 30s for everything else). Callers need a
+deadline to match — the Lua RPC layer passes `timeout_sec = 60` for this method alone.
 
 ### Chat object
 
