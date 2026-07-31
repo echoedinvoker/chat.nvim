@@ -164,6 +164,16 @@ function M.sort_messages(chat_id)
   end)
 end
 
+--- The loaded message with this id, or nil. A linear scan on purpose: the list is one
+--- chat's loaded page range, and a second index keyed by id would be a second thing to keep
+--- in step with append_messages, update_messages and sort_messages.
+function M.find_message(chat_id, msg_id)
+  for _, m in ipairs(M.messages[chat_id] or {}) do
+    if m.id == msg_id then return m end
+  end
+  return nil
+end
+
 function M.mark_read(chat_id)
   local msgs = M.messages[chat_id]
   if msgs and #msgs > 0 then

@@ -31,6 +31,12 @@ function M.set_messages_keymaps(bufnr)
     require("chat-nvim.ui.messages").close()
   end, opts)
 
+  -- `o` is open-line in vim, but this buffer is modifiable = false, so the built-in only
+  -- ever beeped here. Overwriting it takes nothing away.
+  vim.keymap.set("n", "o", function()
+    require("chat-nvim.ui.attachment").open_at_cursor()
+  end, opts)
+
   -- `[` is a built-in prefix ([[, [m, ...), so without the nowait already in opts Neovim
   -- would sit out timeoutlen waiting to see if a second key follows.
   vim.keymap.set("n", "[", function()
