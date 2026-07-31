@@ -9,6 +9,10 @@ local OPENABLE = { video = true, audio = true, file = true }
 
 local ns = vim.api.nvim_create_namespace("chat_nvim_attachment")
 
+--- How long to wait for the bytes. Core gives its adapter 30s and then answers "gone", so
+--- anything at or below that turns a correct answer into a made-up failure.
+local FETCH_TIMEOUT_SEC = 60
+
 --- Test seam, same shape as image.set_renderer: a headless check swaps the real opener for
 --- one that only records what it was asked to open.
 local function default_opener(path)
@@ -105,7 +109,11 @@ function M.open_at_cursor()
         -- Wording comes from the sidecar; Lua must not compose a second version of it.
         M._set_status(messages.get_bufnr(), row, state.norm(result.text) or "附件無法取得")
       end)
-    end
+    end,
+    -- Longer than core's own 30s adapter deadline, so even its "gone" answer arrives.
+    -- The default 10s is shorter than a Telegram refetch takes (14–15s, Phase 0.3), which
+    -- turned every uncached Telegram attachment into "附件取得失敗" regardless of outcome.
+    { timeout_sec = FETCH_TIMEOUT_SEC }
   )
 end
 

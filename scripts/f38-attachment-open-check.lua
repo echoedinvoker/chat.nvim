@@ -30,9 +30,14 @@ local requests = {}
 local held = {}
 local responder = nil
 
+-- The real module is kept aside: group ⑤ asserts its staleness rule directly, which is the
+-- one part of this path a stub cannot stand in for — the stub answers instantly, and
+-- answering instantly is exactly what production does not do here.
+local real_sidecar = dofile(vim.fn.getcwd() .. "/lua/chat-nvim/sidecar.lua")
+
 package.loaded["chat-nvim.sidecar"] = {
-  send = function(method, params, cb)
-    table.insert(requests, { method = method, params = params })
+  send = function(method, params, cb, opts)
+    table.insert(requests, { method = method, params = params, opts = opts })
     if not cb then return end
     local result = responder and responder(method, params, #requests) or nil
     if result == nil then
@@ -186,6 +191,45 @@ attachment.open_at_cursor()
 vim.wait(500, function() return #opened > 0 end)
 ok("4.1 the in-flight guard is cleared once the reply lands",
   #opened == 1, ("opened=%d requests=%d"):format(#opened, #requests))
+
+--------------------------------------------------------------------------------
+-- ⑤ (4.3) the deadline. Phase 0.3 measured a Telegram get_media at 14–15s, and core's own
+-- adapter deadline is 30s — while the Lua layer gave up on every RPC after 10. Every
+-- uncached Telegram attachment therefore showed "附件取得失敗" before the real answer,
+-- success and honest-unavailable alike. The stub above cannot catch that: it replies
+-- instantly, which is precisely what this path does not do in production.
+--------------------------------------------------------------------------------
+
+reset_probe()
+responder = function() return { path = "/tmp/probe.mp4" } end
+cursor_on("telegram:2")
+attachment.open_at_cursor()
+vim.wait(500, function() return #opened > 0 end)
+
+local sent_opts = requests[1] and requests[1].opts
+ok("4.3 fetch_media is sent with a deadline longer than core's 30s adapter timeout",
+  sent_opts and type(sent_opts.timeout_sec) == "number" and sent_opts.timeout_sec > 30,
+  ("opts=%s"):format(vim.inspect(sent_opts)))
+
+-- The rule itself, on the real module. A per-request deadline that silently falls back to
+-- the global one reads exactly like a working one until something takes 11 seconds.
+local is_stale = real_sidecar._is_stale
+ok("4.3 the staleness rule is reachable as a pure function",
+  type(is_stale) == "function", type(is_stale))
+
+if type(is_stale) == "function" then
+  ok("4.3 a request with no deadline of its own still expires at the 10s default",
+    is_stale({ created_at = 0 }, 11) and not is_stale({ created_at = 0 }, 9),
+    ("11s=%s 9s=%s"):format(tostring(is_stale({ created_at = 0 }, 11)),
+      tostring(is_stale({ created_at = 0 }, 9))))
+
+  ok("4.3 a request carrying its own 60s deadline survives past 30s and dies after 60",
+    not is_stale({ created_at = 0, timeout_sec = 60 }, 30)
+      and is_stale({ created_at = 0, timeout_sec = 60 }, 61),
+    ("30s=%s 61s=%s"):format(
+      tostring(is_stale({ created_at = 0, timeout_sec = 60 }, 30)),
+      tostring(is_stale({ created_at = 0, timeout_sec = 60 }, 61))))
+end
 
 --------------------------------------------------------------------------------
 

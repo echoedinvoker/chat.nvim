@@ -25,11 +25,22 @@ local function flush_pending_on_exit()
   pending = {}
 end
 
+--- Has this request waited longer than it was given?
+---
+--- Pulled out as a pure function because the interesting case takes a minute to reproduce
+--- otherwise: fetching a Telegram attachment costs 14–15s (Phase 0.3) and core's own adapter
+--- deadline is 30s, while everything else here should still fail fast. A per-request
+--- deadline that quietly falls back to the default reads exactly like a working one until
+--- something takes eleven seconds.
+function M._is_stale(entry, now)
+  return now - entry.created_at > (entry.timeout_sec or PENDING_TIMEOUT_SEC)
+end
+
 local function sweep_stale_pending()
   local now = vim.loop.now() / 1000
   local stale = {}
   for id, entry in pairs(pending) do
-    if now - entry.created_at > PENDING_TIMEOUT_SEC then
+    if M._is_stale(entry, now) then
       table.insert(stale, id)
     end
   end
@@ -159,7 +170,11 @@ function M.stop()
   -- on_exit callback will clean up
 end
 
-function M.send(method, params, callback)
+--- opts.timeout_sec overrides the default deadline for this one request. Raising the
+--- global default instead would make every genuinely broken RPC — read_messages,
+--- list_chats — sit for a minute before saying so; only fetching an attachment is slow
+--- on purpose.
+function M.send(method, params, callback, opts)
   if not job_id then
     if callback then callback(nil, "sidecar not running") end
     return
@@ -172,6 +187,7 @@ function M.send(method, params, callback)
     pending[id] = {
       callback = callback,
       created_at = vim.loop.now() / 1000,
+      timeout_sec = opts and opts.timeout_sec or nil,
     }
   end
 
