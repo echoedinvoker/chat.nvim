@@ -119,6 +119,12 @@ tools and resources this plugin consumes) or
 - **Opening a Telegram attachment takes 15-40 seconds.** The bytes are refetched from the platform
   rather than kept locally, so the first `o` on any attachment has a real wait. The second is
   instant — it is cached. LINE attachments land in about a second.
+- **An image-heavy chat shows nothing for a while, then everything at once.** Images that arrive
+  late are decoded as a batch and drawn in one pass, so the first screen of a busy chat can sit
+  unchanged for tens of seconds — 47 images took about 38 seconds here — and then fill in
+  completely. Nothing is stuck; there is simply no progress to see. This is separate from the
+  15-40 second wait above, which is about opening one attachment on demand. Worth making
+  incremental if you routinely open chats with dozens of unloaded images.
 - **Cached files have no extension.** Everything that is not an image is stored as `.bin`, so what
   opens it is decided by content sniffing. That works for common types (mp4, pdf, zip, m4a all
   resolved correctly here) but a viewer that keys on the filename may treat the file as a download
