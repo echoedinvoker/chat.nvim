@@ -122,6 +122,20 @@ function M.render_full(chat_id, opts)
   for i = 1, #msg_rows do
     msg_rows[i] = msg_rows[i] + header_offset
   end
+
+  -- Built from the same array format_messages returned, not recounted. That loop is the
+  -- only place that knows how many lines a message took (multi-line bodies, reserved
+  -- image rows) — a second counter written against the same rules is a second thing to
+  -- drift out of step with them.
+  local by_id, by_row = {}, {}
+  for i, msg in ipairs(messages) do
+    if msg.id and msg.id ~= vim.NIL then
+      by_id[msg.id] = msg_rows[i]
+      by_row[msg_rows[i]] = msg.id
+    end
+  end
+  state.msg_rows[chat_id] = { by_id = by_id, by_row = by_row }
+
   image.apply(image.plan(messages, msg_rows), bufnr, winnr)
 
   if not win_valid then return end
@@ -186,7 +200,16 @@ end
 ---     means the whole page shares one timestamp. It guarantees forward progress at the cost
 ---     of the rest of that tie — being stuck forever is worse than losing a few (R1/R2).
 --- is_retry exists so rung 2 can never trigger rung 3: no recursion, at most two requests.
-local function request_older(chat_id, before, is_retry)
+---
+--- on_done is answered on every exit and exactly once, the same discipline in_flight is
+--- cleared under and for the same reason: the search jump pages back in a loop driven by
+--- this callback, so a path that forgets it stalls the loop forever with nothing on screen
+--- to say so. Rung 2 hands it down rather than calling it — one ladder, one answer.
+local function request_older(chat_id, before, is_retry, on_done)
+  local function done()
+    if on_done then on_done() end
+  end
+
   state.in_flight[chat_id] = true
   sidecar.send("read_messages", {
     chat_id = chat_id,
@@ -197,7 +220,10 @@ local function request_older(chat_id, before, is_retry)
       -- Cleared on every exit, including the error one: a stale `true` disables `[` for
       -- this chat with no error shown anywhere (R6).
       state.in_flight[chat_id] = false
-      if err or not result then return end
+      if err or not result then
+        done()
+        return
+      end
 
       local added = state.append_messages(chat_id, result.messages or {})
       state.sort_messages(chat_id)
@@ -207,27 +233,51 @@ local function request_older(chat_id, before, is_retry)
 
       if #added == 0 and result.has_more and not is_retry then
         -- before - 1 drops the inclusive +1 back to a strict `<`.
-        request_older(chat_id, before - 1, true)
+        request_older(chat_id, before - 1, true, on_done)
         return
       end
 
       M.render_full(chat_id, { preserve_view = true })
+      -- After the redraw, so a caller that reacts to this can already read msg_rows.
+      done()
     end)
   end)
 end
 
 --- Load one page of older messages above what is already in the buffer.
-function M.load_older(chat_id)
-  if not chat_id then return end
-  if state.in_flight[chat_id] then return end
+---
+--- on_done is optional and fires once the buffer reflects the outcome — including the
+--- outcomes where nothing was loaded. A refusal that stays silent is indistinguishable
+--- from a request still in the air.
+function M.load_older(chat_id, on_done)
+  local function done()
+    if on_done then on_done() end
+  end
+
+  if not chat_id then return done() end
+  if state.in_flight[chat_id] then return done() end
   -- nil means "never asked", which is a reason to ask. Only an explicit false is an answer.
-  if state.has_more[chat_id] == false then return end
+  if state.has_more[chat_id] == false then return done() end
 
   local msgs = state.messages[chat_id]
   local oldest = msgs and msgs[1] and msgs[1].timestamp
-  if not oldest or oldest == vim.NIL then return end
+  if not oldest or oldest == vim.NIL then return done() end
 
-  request_older(chat_id, oldest + 1, false)
+  request_older(chat_id, oldest + 1, false, on_done)
+end
+
+--- Park the cursor on a message that is already in the buffer.
+--- Returns false if the id is not loaded — the caller pages back and retries.
+function M.focus_message(chat_id, msg_id)
+  local rows = state.msg_rows[chat_id]
+  local row = rows and rows.by_id[msg_id]
+  if not row then return false end
+  if not winnr or not vim.api.nvim_win_is_valid(winnr) then return false end
+  -- rows are 0-based, cursor lines are 1-based.
+  local ok = pcall(vim.api.nvim_win_set_cursor, winnr, { row + 1, 0 })
+  if not ok then return false end
+  vim.api.nvim_win_call(winnr, function() vim.cmd("normal! zz") end)
+  return true
 end
 
 function M.open(chat_id)

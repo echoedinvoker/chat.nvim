@@ -41,6 +41,20 @@ function M.set_messages_keymaps(bufnr)
   end, opts)
 end
 
+function M.set_search_keymaps(bufnr)
+  local opts = { buffer = bufnr, nowait = true, silent = true }
+
+  vim.keymap.set("n", "<CR>", function()
+    require("chat-nvim.ui.search").jump(vim.api.nvim_win_get_cursor(0)[1])
+  end, opts)
+
+  local function close()
+    require("chat-nvim.ui.search").close()
+  end
+  vim.keymap.set("n", "q", close, opts)
+  vim.keymap.set("n", "<Esc>", close, opts)
+end
+
 function M.set_composer_keymaps(bufnr, on_send, on_cancel)
   local opts = { buffer = bufnr, nowait = true, silent = true }
 

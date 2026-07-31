@@ -15,6 +15,12 @@ M.has_more = {}        -- {[chat_id] = boolean} is there anything older in the l
 M.in_flight = {}       -- {[chat_id] = boolean} is a load-older request in the air?
 M.older_hint = {}      -- {[chat_id] = string} top status line; wording decided by sidecar
 
+-- Where each loaded message currently sits in the messages buffer, written by render_full
+-- from the rows format_messages returned. Search's jump and the attachment keymap both
+-- need to go from a message id to a line and back, and neither may recount: the format
+-- loop is the only place that knows how many lines a message took.
+M.msg_rows = {}        -- {[chat_id] = {by_id = {[msg_id] = row}, by_row = {[row] = msg_id}}}
+
 -- There is deliberately no cached-oldest-timestamp table here: the oldest loaded timestamp
 -- is M.messages[chat_id][1].timestamp (update_messages reverses to oldest-first and
 -- sort_messages keeps it ascending). A second copy would be a second truth, and nothing
@@ -201,6 +207,7 @@ function M.reset()
   M.has_more = {}
   M.in_flight = {}
   M.older_hint = {}
+  M.msg_rows = {}
   M.connection = "disconnected"
   M.current_chat = nil
 end

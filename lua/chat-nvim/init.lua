@@ -163,8 +163,9 @@ function M.setup(opts)
   end, { nargs = 1, desc = "Send message to current chat" })
 
   vim.api.nvim_create_user_command("ChatSearch", function(cmd)
-    M._chat_search(cmd.args)
-  end, { nargs = 1, desc = "Search chatmux messages" })
+    ensure_sidecar()
+    require("chat-nvim.ui.search").open(cmd.args ~= "" and cmd.args or nil)
+  end, { nargs = "*", desc = "Search the current chat's full history in the local DB" })
 
   vim.api.nvim_create_user_command("ChatClose", function()
     M.close_ui()
@@ -206,36 +207,6 @@ function M._chat_send(text)
         notify.send_feedback("Send failed: " .. tostring(err), true)
       else
         notify.send_feedback("Sent", false)
-      end
-    end)
-  end)
-end
-
-function M._chat_search(query)
-  ensure_sidecar()
-  sidecar.send("search_messages", { query = query }, function(result, err)
-    vim.schedule(function()
-      if err then return end
-      if not result or not result.results then return end
-      -- Show search results in quickfix
-      local items = {}
-      for _, hit in ipairs(result.results) do
-        local msg = hit.message
-        local sender = msg.sender_name or "unknown"
-        if sender == vim.NIL then sender = "unknown" end
-        -- Search results come through the same `toMessage` as the message list
-        -- (mcp-client.ts:105), which always sets `text`, so the old `[media]` fallback
-        -- here was a second placeholder vocabulary that could only drift from the first.
-        local text_preview = msg.text or ""
-        text_preview = text_preview:gsub("\n", " "):sub(1, 80)
-        table.insert(items, {
-          text = sender .. ": " .. text_preview,
-          lnum = 0,
-        })
-      end
-      vim.fn.setqflist(items, "r")
-      if #items > 0 then
-        vim.cmd("copen")
       end
     end)
   end)
