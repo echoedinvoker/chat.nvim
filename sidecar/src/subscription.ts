@@ -518,13 +518,28 @@ export class SubscriptionManager {
     try {
       await this.client.subscribe(uri);
       this.subscribedUris.add(uri);
-    } catch {
+    } catch (err) {
+      // F54: a subscribe is the other place a dead session surfaces, and falling back to
+      // passive mode here treats "the session id is gone" as "this chat cannot be watched" —
+      // the sidecar then sits in fallback against a daemon that would happily answer a fresh
+      // session. Only a *session* loss escalates: an ordinary "Chat not found" must not tear
+      // down a working session (asserted).
+      if (isSessionGone(err)) {
+        this.subscribedUris.add(uri);
+        void this.recoverSession();
+        return;
+      }
       if (!this.fallbackMode) {
         console.error(
           `[sidecar] subscribe failed for ${uri}, falling back to passive mode`
         );
         this.fallbackMode = true;
       }
+      // Deliberate, and it reads like a leak: the uri goes into the set even though the
+      // subscribe never took. A reconnect is exactly when a subscription that failed should
+      // be tried again, and resubscribeAll() only knows about what is in this set — drop it
+      // here and the chat stays silently unsubscribed for the rest of the session.
+      // Pinned by "F54 sidenote: a subscribe that failed is still replayed on reconnect".
       this.subscribedUris.add(uri);
     }
   }

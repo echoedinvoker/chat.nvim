@@ -925,6 +925,55 @@ describe("F60: the daemon being unreachable is its own state", () => {
     expect(notifications.some((n) => n.method === "reconnecting")).toBe(true);
   });
 });
+
+describe("F54 sidenote: a subscribe that failed is still replayed on reconnect", () => {
+  test("the uri stays in the set, so recovery retries it", async () => {
+    const subscribe = mock(() => Promise.reject(new Error("subscribe blew up")));
+    const client = createTailClient({
+      subscribe,
+      reconnect: mock(() => Promise.resolve()),
+    });
+    const mgr = newManager(client);
+
+    await mgr.subscribeChat("chat-1");
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    await mgr._test_recoverSession();
+
+    // Keeping a never-succeeded uri looks like a bug and is not: a reconnect is
+    // exactly when a subscription that never took should be tried again. This test
+    // exists so the next reader does not "fix" it back into a leak.
+    expect(subscribe.mock.calls.length).toBeGreaterThan(1);
+  });
+});
+
+describe("F54: a subscribe that dies of a dead session escalates", () => {
+  test("session loss during subscribe triggers recovery", async () => {
+    const client = createTailClient({
+      subscribe: mock(() =>
+        Promise.reject(Object.assign(new Error("Session not found"), { code: -32000 })),
+      ),
+      reconnect: mock(() => Promise.resolve()),
+    });
+    const mgr = newManager(client);
+
+    await mgr.subscribeChat("chat-1");
+
+    expect(notifications.some((n) => n.method === "reconnecting")).toBe(true);
+  });
+
+  test("an ordinary subscribe failure must NOT tear the session down", async () => {
+    const client = createTailClient({
+      subscribe: mock(() => Promise.reject(new Error("Chat not found"))),
+      reconnect: mock(() => Promise.resolve()),
+    });
+    const mgr = newManager(client);
+
+    await mgr.subscribeChat("chat-1");
+
+    expect(notifications.some((n) => n.method === "reconnecting")).toBe(false);
+  });
+});
 });
 
 describe("resource pushes carry the history banner", () => {
