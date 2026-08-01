@@ -821,6 +821,110 @@ describe("SubscriptionManager", () => {
     expect(pathOf("chat://chats/telegram:-100A/messages")).toBe("/c/telegram:-100A.jpg");
     expect(pathOf("chat://chats/telegram:-100B/messages")).toBe("/c/telegram:-100B.jpg");
   });
+
+describe("F60: the daemon being unreachable is its own state", () => {
+  const socketGone = () =>
+    Object.assign(new Error("Was there a typo in the url or port?"), {
+      code: "FailedToOpenSocket",
+    });
+
+  test("a poll that cannot reach the daemon says so, exactly once", async () => {
+    const client = createTailClient({
+      readEvents: mock(() => Promise.reject(socketGone())),
+    });
+    const mgr = newManager(client);
+
+    await mgr._test_pollOnce();
+    await mgr._test_pollOnce();
+    await mgr._test_pollOnce();
+
+    const said = notifications.filter((n) => n.method === "daemon_unreachable");
+    expect(said.length).toBe(1);
+    // A dead socket is not a dead session: entering recoverSession here would retry
+    // an initialize against a daemon that is not listening (F53 Phase 0.2 Q3).
+    expect(notifications.some((n) => n.method === "reconnecting")).toBe(false);
+  });
+
+  test("the notification carries the code, so the log can name the cause", async () => {
+    const client = createTailClient({
+      readEvents: mock(() => Promise.reject(socketGone())),
+    });
+    await newManager(client)._test_pollOnce();
+
+    const said = notifications.find((n) => n.method === "daemon_unreachable");
+    expect(said?.params.code).toBe("FailedToOpenSocket");
+  });
+
+  test("a drain that works again clears the signal, and can raise it a second time", async () => {
+    let down = true;
+    const client = createTailClient({
+      readEvents: mock(() =>
+        down
+          ? Promise.reject(
+              Object.assign(new Error("Was there a typo in the url or port?"), {
+                code: "FailedToOpenSocket",
+              }),
+            )
+          : Promise.resolve({
+              events: [], next_cursor: "evt:100",
+              head_cursor: "evt:100", has_more: false,
+            }),
+      ),
+    });
+    const mgr = newManager(client);
+
+    await mgr._test_pollOnce();                       // down  -> raise
+    down = false;
+    await mgr._test_pollOnce();                       // up    -> clear
+    down = true;
+    await mgr._test_pollOnce();                       // down  -> raise again
+
+    const methods = notifications.map((n) => n.method);
+    expect(methods.filter((m) => m === "daemon_unreachable").length).toBe(2);
+    // A stuck flag is the failure mode that matters: it would make the *second*
+    // outage silent, which is the exact bug this project exists to remove.
+    expect(methods.indexOf("connected")).toBeGreaterThan(
+      methods.indexOf("daemon_unreachable"),
+    );
+  });
+
+  test("recovering through F53's session path also clears the flag", async () => {
+    let phase: "down" | "session-gone" | "ok" = "down";
+    const client = createTailClient({
+      readEvents: mock(() => {
+        if (phase === "down") {
+          return Promise.reject(
+            Object.assign(new Error("Was there a typo in the url or port?"), {
+              code: "FailedToOpenSocket",
+            }),
+          );
+        }
+        if (phase === "session-gone") {
+          return Promise.reject(
+            Object.assign(new Error("Session not found"), { code: -32000 }),
+          );
+        }
+        return Promise.resolve({
+          events: [], next_cursor: "evt:100",
+          head_cursor: "evt:100", has_more: false,
+        });
+      }),
+      reconnect: mock(() => Promise.resolve()),
+    });
+    const mgr = newManager(client);
+
+    await mgr._test_pollOnce();      // raise
+    phase = "session-gone";
+    await mgr._test_pollOnce();      // F53 recoverSession -> reconnecting, connected
+    phase = "down";
+    await mgr._test_pollOnce();      // must be able to raise again
+
+    expect(
+      notifications.filter((n) => n.method === "daemon_unreachable").length,
+    ).toBe(2);
+    expect(notifications.some((n) => n.method === "reconnecting")).toBe(true);
+  });
+});
 });
 
 describe("resource pushes carry the history banner", () => {

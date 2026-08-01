@@ -27,10 +27,21 @@ export interface Notification {
   params: Record<string, unknown>;
 }
 
+/**
+ * Documentation, not a defence. `NotificationHandler`'s method parameter is a plain `string`,
+ * so nothing here is enforced at a call site — this union went stale the moment F53 added
+ * `reconnecting`/`reconnect_failed` without touching it, and nothing complained.
+ *
+ * What actually verifies that Lua handles a method is the headless assertion in
+ * `scripts/f60-offline-signal-check.lua`.
+ */
 export type NotificationMethod =
   | "resource_updated"
   | "connected"
   | "disconnected"
+  | "reconnecting"
+  | "reconnect_failed"
+  | "daemon_unreachable"
   | "error";
 
 export type OutgoingMessage = Response | Notification;

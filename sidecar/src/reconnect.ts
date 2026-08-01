@@ -33,3 +33,30 @@ export function isSessionGone(err: unknown): boolean {
   if (err instanceof Error) return true;
   return code === -32000 || code === -32001;
 }
+
+/**
+ * Bun's own name for "there was nothing listening on that unix socket", measured 2026-08-01
+ * against a socket path that does not exist. ECONNREFUSED/ENOENT are the same outage arriving
+ * through node-compatible paths.
+ */
+const UNREACHABLE_CODES = new Set(["FailedToOpenSocket", "ECONNREFUSED", "ENOENT"]);
+
+/**
+ * The other half of the outage pair. A vanished *session* means the daemon is alive and the
+ * first retry wins; a daemon that cannot be *reached* can stay gone until someone starts it.
+ * Telling them apart is the whole of F60 — collapsing them would make "reconnecting" mean
+ * nothing to the person reading the status line.
+ *
+ * Matching on `code` and not on `message` is deliberate: Bun's message ("Was there a typo in
+ * the url or port?") is user-facing prose and will be reworded. It is asserted in the tests so
+ * a reword fails loudly there instead of silently switching this detector off.
+ *
+ * Mutual exclusivity with isSessionGone is carried by the types themselves: these codes are
+ * strings, that one compares numbers (-32000/-32001) after an exact message match.
+ */
+export function isDaemonUnreachable(err: unknown): boolean {
+  if (err === null || typeof err !== "object") return false;
+
+  const { code } = err as { code?: unknown };
+  return typeof code === "string" && UNREACHABLE_CODES.has(code);
+}

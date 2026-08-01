@@ -7,7 +7,12 @@ import type {
   MediaResult,
 } from "./types.ts";
 import { CursorStore, defaultCursorPath } from "./cursor-store.ts";
-import { isSessionGone, backoffMs, MAX_RECONNECT_ATTEMPTS } from "./reconnect.ts";
+import {
+  isSessionGone,
+  isDaemonUnreachable,
+  backoffMs,
+  MAX_RECONNECT_ATTEMPTS,
+} from "./reconnect.ts";
 
 export type NotificationHandler = (
   method: string,
@@ -46,6 +51,12 @@ export class SubscriptionManager {
   private draining = false;
   /** A trigger arrived while a drain was in flight; run one more pass instead of nesting. */
   private drainAgain = false;
+  /**
+   * Whether the user has already been told the daemon is gone. A de-dup latch, not a counter:
+   * a real outage produces the identical failure every 15s, and notifying on each one would
+   * just replay F53's 960-identical-failures flood under a new method name.
+   */
+  private daemonUnreachable = false;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   /** A recovery is in flight. Two of them would open two sessions and strand the first. */
   private reconnecting = false;
@@ -231,6 +242,10 @@ export class SubscriptionManager {
         this.drainAgain = false;
         await this.drainEvents();
       } while (this.drainAgain);
+      // Recovery path ①: the socket simply answers again, session intact. Nothing else in the
+      // code would ever lower the latch on this path, and a latch that never falls makes the
+      // *second* outage silent.
+      this.clearDaemonUnreachable();
     } catch (err) {
       // F53: by Phase 0.2 Q3 the poll is the only detector left once the daemon dies — the SSE
       // loop ends on the spot and nothing reopens it. So a dead session surfaces here and
@@ -240,12 +255,36 @@ export class SubscriptionManager {
         await this.recoverSession();
         return;
       }
+      // F60: the other outage. Ordered after isSessionGone because that one is the recoverable
+      // one; the two predicates are proven mutually exclusive (reconnect.test.ts), so the order
+      // changes only how this reads, not what it does.
+      if (isDaemonUnreachable(err)) {
+        if (!this.daemonUnreachable) {
+          this.daemonUnreachable = true;
+          const { code } = err as { code?: unknown };
+          console.error(`[sidecar] daemon unreachable (${String(code)})`);
+          this.onNotify("daemon_unreachable", { code: String(code) });
+        }
+        return;
+      }
       // The cursor has not advanced past whatever failed, so the next trigger retries it.
       console.error("[sidecar] event tail drain failed, retrying next trigger:", err);
     } finally {
       this.draining = false;
       this.drainAgain = false;
     }
+  }
+
+  /**
+   * The one place that lowers the latch and says so. Called from the drain-succeeds path;
+   * recoverSession lowers it inline instead, because it already sends its own `connected`
+   * and two of them would make the Lua side flip state twice for one recovery.
+   */
+  private clearDaemonUnreachable(): void {
+    if (!this.daemonUnreachable) return;
+    this.daemonUnreachable = false;
+    console.error("[sidecar] daemon reachable again");
+    this.onNotify("connected", {});
   }
 
   /** Named for the seam it is: a test hook, not public API (cf. `_test_pollOnce`). */
@@ -283,6 +322,10 @@ export class SubscriptionManager {
           console.error("[sidecar] SSE loop failed after reconnect:", err);
         });
         console.error("[sidecar] reconnected");
+        // Recovery path ②: the daemon came back and the session did not survive it. Lower the
+        // latch here rather than calling clearDaemonUnreachable() — the `connected` below is
+        // already this recovery's one announcement.
+        this.daemonUnreachable = false;
         this.onNotify("connected", {});
         return;
       }

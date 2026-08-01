@@ -2,7 +2,7 @@ import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isSessionGone, backoffMs, MAX_RECONNECT_ATTEMPTS } from "../src/reconnect.ts";
+import { isSessionGone, isDaemonUnreachable, backoffMs, MAX_RECONNECT_ATTEMPTS } from "../src/reconnect.ts";
 import { McpClient } from "../src/mcp-client.ts";
 import { SubscriptionManager } from "../src/subscription.ts";
 
@@ -29,6 +29,60 @@ describe("isSessionGone", () => {
 
   test("undefined is not a session loss", () => {
     expect(isSessionGone(undefined)).toBe(false);
+  });
+});
+
+describe("isDaemonUnreachable", () => {
+  // Measured 2026-08-01: this is verbatim what Bun throws for a unix socket that is
+  // not there — message included, so a future Bun wording change fails loudly here
+  // instead of silently turning the detector off.
+  const socketGone = Object.assign(
+    new Error("Was there a typo in the url or port?"),
+    { code: "FailedToOpenSocket", errno: 0, path: "/run/user/1000/chatmux.sock" },
+  );
+  const refused = Object.assign(new Error("connect ECONNREFUSED"), {
+    code: "ECONNREFUSED",
+  });
+  const noEntry = Object.assign(new Error("no such file or directory"), {
+    code: "ENOENT",
+  });
+  const sessionGone = { code: -32000, message: "Session not found" };
+  const toolError = { code: -32602, message: "Invalid params" };
+
+  test("Bun's unix-socket failure counts", () => {
+    expect(isDaemonUnreachable(socketGone)).toBe(true);
+  });
+
+  test("a refused connection counts", () => {
+    expect(isDaemonUnreachable(refused)).toBe(true);
+  });
+
+  test("a missing socket path counts", () => {
+    expect(isDaemonUnreachable(noEntry)).toBe(true);
+  });
+
+  test("a vanished session is NOT unreachable — the daemon is alive", () => {
+    expect(isDaemonUnreachable(sessionGone)).toBe(false);
+  });
+
+  test("an ordinary tool error does not count", () => {
+    expect(isDaemonUnreachable(toolError)).toBe(false);
+  });
+
+  test("undefined is not unreachable", () => {
+    expect(isDaemonUnreachable(undefined)).toBe(false);
+  });
+
+  test("a bare Error with no code is not unreachable", () => {
+    expect(isDaemonUnreachable(new Error("something else"))).toBe(false);
+  });
+
+  // The whole point of F60 is that these are two different outages with two different
+  // durations. If one error ever satisfied both, the state machine would race itself.
+  test("the two predicates are mutually exclusive on every fixture", () => {
+    for (const e of [socketGone, refused, noEntry, sessionGone, toolError, undefined]) {
+      expect(isSessionGone(e) && isDaemonUnreachable(e)).toBe(false);
+    }
   });
 });
 
