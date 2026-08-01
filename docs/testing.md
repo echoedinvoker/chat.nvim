@@ -99,6 +99,29 @@ Since Lua plugin code is not TDD'd, verify manually:
 
 Check these after any significant Lua change.
 
+### The running sidecar is not the code you just edited
+
+The sidecar is a long-lived Bun process that Neovim starts once. Editing `sidecar/src/`
+does **not** hot-reload it: until you close that Neovim and open a new one, the process
+still runs the code it was launched with.
+
+This bites hardest when the thing you are verifying is a *detector*. Grepping the log for
+a line your new branch is supposed to print and finding zero of them reads as "the branch
+did not fire" — but the branch is not in that process at all. The tell is the old path
+still logging: if you see the message the code used to print, you are looking at the old
+build.
+
+So before any end-to-end run that is meant to exercise sidecar changes:
+
+1. Close the Neovim that owns the sidecar (`pgrep -af "chat.nvim/sidecar"` should go empty)
+2. Open a fresh one and re-run `:ChatList`
+3. Confirm the new process started *after* your edit:
+   `ps -C bun -o pid=,lstart=,cmd= | grep chat.nvim/sidecar` against the file's mtime
+
+Use `ps -C bun` rather than `pgrep -f` for that check: `pgrep -f` matches on the full
+command line and will happily match the shell running the `pgrep` itself, so it can report
+a PID when no sidecar exists at all.
+
 ### Headless assertion scripts
 
 Some Lua behaviour cannot be settled by looking: "the view did not jump" and "the paging
