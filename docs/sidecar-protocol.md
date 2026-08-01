@@ -343,7 +343,9 @@ The sidecar is a standard MCP Streamable HTTP client connecting over unix socket
 
 **Unsubscribe**: On `close_chat` from Lua, sidecar calls MCP `resources/unsubscribe` and removes from set.
 
-**Fallback**: If daemon returns error on `resources/subscribe` (not supported), sidecar degrades to passive mode — receives all SSE notifications and filters client-side by URI string matching (E2 spike behavior).
+**Fallback (no longer a working fallback)**: if the daemon errors on `resources/subscribe`, the sidecar logs `subscribe failed … falling back to passive mode`, adds the URI to `subscribedUris` anyway, and carries on filtering SSE notifications client-side. That was survivable only while the daemon broadcast every update to every session, which it did until 2026-08-01. It now sends `notifications/resources/updated` **only to the sessions that subscribed to that URI**, so a session whose subscribe failed receives nothing and "passive mode" delivers no messages at all — it just fails quietly instead of loudly.
+
+Against the current daemon the branch is unreachable (subscribe succeeds; the log line stopped appearing after chatmux `0fbf0f7`). It matters if you point the sidecar at an older daemon, and it is the reason the log line existed for so long without anyone noticing it was a real failure: the thing it warned about was being papered over by the broadcast.
 
 ### SSE event handling
 
