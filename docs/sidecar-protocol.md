@@ -226,6 +226,8 @@ the number in the hint and the number fetched cannot drift apart.
 | `resource_updated` | `{uri, sidecar_received_at, ...data}` | A subscribed MCP resource changed. Sidecar fetches the data itself and includes it inline (see below). |
 | `connected` | `{}` | Sidecar successfully connected to chatmux daemon. |
 | `disconnected` | `{reason: string}` | Connection to daemon lost. |
+| `reconnecting` | `{}` | The daemon's session is gone (it restarted) and the sidecar is rebuilding: new `initialize`, then every subscription again, then a fresh SSE stream. A `connected` follows on success. |
+| `reconnect_failed` | `{attempts: number}` | Recovery gave up after `attempts` tries. The sidecar is still alive and the poll keeps running, so a later attempt can still succeed — but nothing will update until it does. |
 | `error` | `{message: string}` | Non-fatal error (e.g. subscription failure). |
 
 #### `resource_updated` payload details
@@ -370,5 +372,10 @@ costs latency, not correctness.
 
 - **JSON parse failure on stdin**: Log to stderr, skip the line, do not crash.
 - **MCP request failure**: Return `{"id": N, "error": {"message": "..."}}` to Lua.
-- **SSE stream disconnection**: Emit `disconnected` notification, attempt reconnect.
+- **SSE stream disconnection**: Emit `disconnected`. The stream is *not* reopened from here —
+  when the daemon dies the read ends cleanly and there is nothing to reconnect to yet.
+- **Daemon restarted (session gone)**: the poll is the detector, not SSE. Its next tick gets
+  `-32000 Session not found`, which triggers `initialize` → resubscribe every uri → reopen SSE,
+  announced as `reconnecting` and then `connected`. The event cursor is kept: core encodes it
+  as a SQLite `messages.seq`, so it survives the restart.
 - **Socket not found**: Emit `error` notification with clear message, exit with non-zero code.

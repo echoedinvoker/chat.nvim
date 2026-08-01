@@ -7,6 +7,7 @@ import type {
   MediaResult,
 } from "./types.ts";
 import { CursorStore, defaultCursorPath } from "./cursor-store.ts";
+import { isSessionGone, backoffMs, MAX_RECONNECT_ATTEMPTS } from "./reconnect.ts";
 
 export type NotificationHandler = (
   method: string,
@@ -46,6 +47,8 @@ export class SubscriptionManager {
   /** A trigger arrived while a drain was in flight; run one more pass instead of nesting. */
   private drainAgain = false;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  /** A recovery is in flight. Two of them would open two sessions and strand the first. */
+  private reconnecting = false;
 
   constructor(
     client: McpClient,
@@ -65,6 +68,34 @@ export class SubscriptionManager {
   async subscribeChat(chatId: string): Promise<void> {
     const uri = `chat://chats/${chatId}/messages`;
     await this.subscribe(uri);
+  }
+
+  /**
+   * A new session knows nothing about the old one's subscriptions, so every uri has to be
+   * asked for again. `subscribe()` early-returns on a uri it already has, which is right for
+   * the normal path and wrong here — hence the direct client call. The Set itself is left
+   * alone: clearing it would break the membership checks in `pushEvents` and
+   * `handleSseMessage` that decide what is worth pushing.
+   *
+   * The log line is not decoration: F42 read "0 subscribe failures" as success when the
+   * sidecar had never reached subscribe at all. This is the evidence that it did.
+   */
+  async resubscribeAll(): Promise<void> {
+    const uris = [...this.subscribedUris];
+    this.fallbackMode = false;
+    let ok = 0;
+    for (const uri of uris) {
+      try {
+        await this.client.subscribe(uri);
+        ok += 1;
+      } catch {
+        if (!this.fallbackMode) {
+          console.error(`[sidecar] resubscribe failed for ${uri}, falling back to passive mode`);
+          this.fallbackMode = true;
+        }
+      }
+    }
+    console.error(`[sidecar] resubscribed ${ok} uri(s)`);
   }
 
   async unsubscribeChat(chatId: string): Promise<void> {
@@ -201,11 +232,68 @@ export class SubscriptionManager {
         await this.drainEvents();
       } while (this.drainAgain);
     } catch (err) {
+      // F53: by Phase 0.2 Q3 the poll is the only detector left once the daemon dies — the SSE
+      // loop ends on the spot and nothing reopens it. So a dead session surfaces here and
+      // nowhere else, and retrying "next trigger" would retry forever against an id the daemon
+      // has never heard of (measured: 960 identical failures over four hours).
+      if (isSessionGone(err)) {
+        await this.recoverSession();
+        return;
+      }
       // The cursor has not advanced past whatever failed, so the next trigger retries it.
       console.error("[sidecar] event tail drain failed, retrying next trigger:", err);
     } finally {
       this.draining = false;
       this.drainAgain = false;
+    }
+  }
+
+  /** Named for the seam it is: a test hook, not public API (cf. `_test_pollOnce`). */
+  _test_recoverSession = (): Promise<void> => this.recoverSession();
+
+  /**
+   * Rebuild everything a new session does not inherit: the session id itself, every
+   * subscription, and the SSE stream. The cursor is deliberately left alone — core encodes it
+   * as `messages.seq` from SQLite (chatmux src/core/mcp/tools.ts:230), so it stays valid
+   * across a daemon restart and re-deriving it would either replay or skip.
+   */
+  private async recoverSession(): Promise<void> {
+    // Check-and-set before any await: `backoffMs(1)` is 0, but its setTimeout still yields,
+    // and a guard set after that turns the concurrency test into a scheduling coin flip.
+    if (this.reconnecting) return;
+    this.reconnecting = true;
+
+    try {
+      this.onNotify("reconnecting", {});
+
+      for (let attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt += 1) {
+        const wait = backoffMs(attempt);
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+
+        try {
+          await this.client.reconnect();
+        } catch (err) {
+          console.error(`[sidecar] reconnect attempt ${attempt} failed:`, err);
+          continue;
+        }
+
+        await this.resubscribeAll();
+        // Not awaited, same as the initial start: the loop only returns when the stream ends.
+        void this.startSseLoop().catch((err) => {
+          console.error("[sidecar] SSE loop failed after reconnect:", err);
+        });
+        console.error("[sidecar] reconnected");
+        this.onNotify("connected", {});
+        return;
+      }
+
+      console.error(
+        `[sidecar] gave up reconnecting after ${MAX_RECONNECT_ATTEMPTS} attempts`,
+      );
+      this.onNotify("reconnect_failed", { attempts: MAX_RECONNECT_ATTEMPTS });
+    } finally {
+      // R14's reason: resetting only on success wedges recovery forever after one bad run.
+      this.reconnecting = false;
     }
   }
 

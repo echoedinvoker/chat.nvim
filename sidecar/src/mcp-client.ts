@@ -19,9 +19,15 @@ export class McpClient {
   private socketPath: string;
   private sessionId: string | null = null;
   private nextId = 1;
+  /**
+   * The one and only test seam. A second way in would drift from this one, so the reconnect
+   * tests all go through here rather than growing their own hook.
+   */
+  private fetchImpl: typeof fetch;
 
-  constructor(socketPath?: string) {
+  constructor(socketPath?: string, opts: { fetchImpl?: typeof fetch } = {}) {
     this.socketPath = socketPath ?? process.env.CHATMUX_SOCKET ?? DEFAULT_SOCKET;
+    this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
   async connect(): Promise<void> {
@@ -34,6 +40,17 @@ export class McpClient {
     if (!result) throw new Error("MCP initialize failed: no response");
 
     await this.rawNotification("notifications/initialized", {});
+  }
+
+  /**
+   * The daemon keeps its sessions in memory (chatmux src/core/mcp/server.ts:74-94), so a
+   * restart leaves this client holding an id the server has never heard of — and every request
+   * carrying it comes back 404 forever, because `rawRequest` only ever picks up an id when it
+   * has none. Clearing it first is what makes the re-initialize a fresh one.
+   */
+  async reconnect(): Promise<void> {
+    this.sessionId = null;
+    await this.connect();
   }
 
   async listChats(params: {
@@ -291,7 +308,7 @@ export class McpClient {
   }
 
   async openSseStream(): Promise<ReadableStream<Uint8Array>> {
-    const res = await fetch("http://localhost/mcp", {
+    const res = await this.fetchImpl("http://localhost/mcp", {
       method: "GET",
       headers: {
         Accept: "text/event-stream",
@@ -319,7 +336,7 @@ export class McpClient {
     };
     if (this.sessionId) headers["mcp-session-id"] = this.sessionId;
 
-    const res = await fetch("http://localhost/mcp", {
+    const res = await this.fetchImpl("http://localhost/mcp", {
       method: "POST",
       headers,
       body: JSON.stringify(body),
@@ -333,7 +350,14 @@ export class McpClient {
     const text = await res.text();
     const parsed = this.parseResponse(text);
     if (parsed?.error) {
-      throw new Error(parsed.error.message ?? JSON.stringify(parsed.error));
+      // The code has to survive the throw: "Session not found" is a recoverable -32000 while
+      // an ordinary tool failure must not tear the session down, and the message alone cannot
+      // tell those apart (see reconnect.ts / isSessionGone).
+      const e = new Error(
+        parsed.error.message ?? JSON.stringify(parsed.error),
+      ) as Error & { code?: number };
+      e.code = parsed.error.code;
+      throw e;
     }
     return parsed;
   }
@@ -342,7 +366,7 @@ export class McpClient {
     method: string,
     params: Record<string, unknown>
   ): Promise<void> {
-    await fetch("http://localhost/mcp", {
+    await this.fetchImpl("http://localhost/mcp", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
