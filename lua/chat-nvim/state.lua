@@ -2,7 +2,7 @@ local M = {}
 
 M.chats = {}           -- Chat[] from list_chats
 M.messages = {}        -- {[chat_id] = Message[]}
-M.connection = "disconnected" -- "connected" | "disconnected"
+M.connection = "disconnected" -- "connected" | "reconnecting" | "disconnected"
 M.current_chat = nil   -- chat_id or nil
 M.last_read = {}       -- {[chat_id] = timestamp} client-side unread tracking
 M.banners = {}         -- {[chat_id] = string} history notice shown above the messages

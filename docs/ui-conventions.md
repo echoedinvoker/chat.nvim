@@ -342,7 +342,7 @@ of the text below it.
 | New message in **current** chat | Buffer append | Handled by messages.lua append flow |
 | Edit / retraction in **current** chat | Buffer redraw | `render_full` with the cursor preserved; retracted text renders as italic `_[訊息已收回]_` so it reads as absence rather than as something the sender typed |
 | New message in **other** chat | Chat list update + statusline badge | Update `[●]` marker, increment badge count |
-| Connection status change | Statusline | `[connected]` / `[disconnected]` |
+| Connection status change | Statusline | `[reconnecting]` / `[disconnected]` (connected shows unreads or nothing) |
 | Send success/failure | Virtual text extmark | Temporary extmark near composer area, auto-clear after 3s |
 | Error (daemon not running, etc.) | Virtual text in chat list | Persistent until resolved |
 
@@ -350,10 +350,32 @@ of the text below it.
 
 Expose `require('chat-nvim').statusline()` returning a string:
 - `💬 3` — 3 chats with unread messages (based on client-side `last_read` tracking)
+- `[reconnecting]` — the daemon's session went away (it restarted) and the sidecar is
+  rebuilding: new `initialize`, every subscription again, fresh SSE stream
 - `[disconnected]` — sidecar not connected to daemon
 - Empty string — no unreads, connected
 
 Users integrate this into their own statusline config (lualine, heirline, etc.).
+
+#### Why recovery gets its own state (F53)
+
+`[reconnecting]` is not a milder `[disconnected]`. During recovery the sidecar is alive and
+working, and nothing is asked of the user; during `[disconnected]` it has stopped and the
+user has to do something. Collapsing them would break the F27 rule that the status line does
+not lie in either direction — it would either ask for help that isn't needed, or stay quiet
+when it is.
+
+Neither state goes through the cmdline. Recovery is frequent (every `systemctl --user restart
+chatmux`, and F28 made config changes require exactly that), so a `vim.notify` here would put
+a "Press ENTER" in front of the user on a routine action.
+
+The wording of the give-up message follows F34: it says the sidecar could not reconnect and
+asks whether the daemon is running. It does **not** claim the daemon has stopped — the
+sidecar cannot see that, and a wrong diagnosis sends the user looking in the wrong place.
+
+⚠️ Whether the user actually *sees* any of this is a separate, open problem: `statusline()`
+only shows up if it has been wired into a statusline, and `show_error_in_chat_list` returns
+silently when no chat list buffer exists. Tracked as F55.
 
 ### Virtual text extmarks
 

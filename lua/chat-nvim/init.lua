@@ -126,6 +126,16 @@ local function handle_notification(method, params)
     else
       notify.show_error_in_chat_list("Disconnected: " .. reason)
     end
+  elseif method == "reconnecting" then
+    state.connection = "reconnecting"
+  elseif method == "reconnect_failed" then
+    state.connection = "disconnected"
+    local notify = require("chat-nvim.ui.notify")
+    -- F27/F34: only what is known to be true. The sidecar cannot see whether the daemon is
+    -- down, misconfigured, or just slow — it only knows its own retries ran out.
+    notify.show_error_in_chat_list(
+      "Lost the chatmux daemon and could not reconnect — is it running?"
+    )
   elseif method == "resource_updated" then
     handle_resource_updated(params)
   elseif method == "error" then
@@ -249,6 +259,12 @@ function M.refresh_chats()
 end
 
 function M.statusline()
+  -- Checked before "disconnected" because recovery is a distinct state, not a milder outage:
+  -- the sidecar is alive and working on it, so telling the user to go check the daemon would
+  -- be wrong (F27 — the status line does not lie).
+  if state.connection == "reconnecting" then
+    return "[reconnecting]"
+  end
   if state.connection == "disconnected" then
     return "[disconnected]"
   end
