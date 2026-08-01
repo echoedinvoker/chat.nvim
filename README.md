@@ -60,7 +60,7 @@ It defaults to `$CHATMUX_SOCKET`, falling back to the path above.
 Optionally surface the unread count in your statusline:
 
 ```lua
-require("chat-nvim").statusline()  -- "💬 3", "[disconnected]", or ""
+require("chat-nvim").statusline()  -- "💬 3", "[reconnecting]", "[disconnected]", or ""
 ```
 
 ## Usage
@@ -145,6 +145,11 @@ tools and resources this plugin consumes) or
   your phone.
 - **One daemon, one slot.** If you also run `line-tui`, stop it first — both occupy the same LINE
   device slot.
+- **A daemon outage is silent while it lasts.** Restart the daemon and the sidecar picks itself up
+  on the next poll (within ~15s) — no need to restart Neovim. But while the daemon is actually
+  down there is no on-screen sign of it: the buffer simply stops changing. The reason is that a
+  missing socket is not the same as a lost session, and only the latter is something to recover
+  from. Check `~/.local/state/nvim/chat-nvim.log` if the chats have gone quiet.
 
 ## Development
 
