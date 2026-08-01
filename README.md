@@ -57,10 +57,46 @@ require("chat-nvim").setup({
 
 It defaults to `$CHATMUX_SOCKET`, falling back to the path above.
 
-Optionally surface the unread count in your statusline:
+### Statusline
+
+`require("chat-nvim").statusline()` returns one string, and it is the only place an outage
+announces itself — nothing is printed and nothing pops up. Wire it in or you will not know
+when the daemon has stopped.
+
+| Returns | Means |
+|---|---|
+| `💬 3` | three chats have unread messages |
+| `[daemon offline]` | the sidecar reached the socket and found nothing listening — the daemon is not running (`systemctl --user start chatmux`) |
+| `[reconnecting]` | the daemon restarted and the sidecar is rebuilding its session; nothing is asked of you |
+| `[disconnected]` | the sidecar itself is not connected |
+| `""` | connected, nothing unread |
+
+**lualine** — note that `sections` replaces lualine's defaults outright instead of merging,
+so write back the components you want to keep:
 
 ```lua
-require("chat-nvim").statusline()  -- "💬 3", "[reconnecting]", "[disconnected]", or ""
+{
+  'nvim-lualine/lualine.nvim',
+  opts = {
+    sections = {
+      lualine_a = { 'mode' },
+      lualine_b = { 'branch', 'diff', 'diagnostics' },
+      lualine_c = { 'filename' },
+      lualine_x = {
+        { function() return require('chat-nvim').statusline() end },
+        'encoding', 'fileformat', 'filetype',
+      },
+      lualine_y = { 'progress' },
+      lualine_z = { 'location' },
+    },
+  },
+}
+```
+
+**Built-in statusline**:
+
+```lua
+vim.o.statusline = "%f %h%m%r%= %{v:lua.require'chat-nvim'.statusline()} %l,%c"
 ```
 
 ## Usage

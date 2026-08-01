@@ -116,7 +116,15 @@ end
 local function handle_notification(method, params)
   if method == "connected" then
     state.connection = "connected"
+    require("chat-nvim.ui.notify").clear_persistent_notice()
     check_adapter_status()
+  elseif method == "daemon_unreachable" then
+    state.connection = "daemon_unreachable"
+    local notify = require("chat-nvim.ui.notify")
+    -- F27: only what is known to be true. The sidecar reached the socket layer and found
+    -- nothing listening — that is a statement about the daemon, not about the network,
+    -- the config, or how long it will last.
+    notify.set_persistent_notice("chatmux daemon is not running")
   elseif method == "disconnected" then
     state.connection = "disconnected"
     local notify = require("chat-nvim.ui.notify")
@@ -259,6 +267,13 @@ function M.refresh_chats()
 end
 
 function M.statusline()
+  -- The four states live in one variable and only one can hold at a time, so the order of
+  -- these checks is readability, not precedence — there is no priority logic here to preserve.
+  if state.connection == "daemon_unreachable" then
+    -- Distinct from [reconnecting] on purpose: that one means "the sidecar is alive and
+    -- working on it, back in a moment"; this one can last until someone starts the daemon.
+    return "[daemon offline]"
+  end
   -- Checked before "disconnected" because recovery is a distinct state, not a milder outage:
   -- the sidecar is alive and working on it, so telling the user to go check the daemon would
   -- be wrong (F27 — the status line does not lie).
@@ -278,5 +293,9 @@ end
 -- Exported for scripts/f9-banner-guard-check.lua only: the banner guard's failure mode is
 -- a line quietly disappearing, which nothing else can assert from outside.
 M._test_handle_resource_updated = handle_resource_updated
+
+-- Exported for scripts/f60-offline-signal-check.lua only: F55's failure was a state being
+-- right while nothing showed it, so the check has to drive the handler from outside.
+M._test_handle_notification = handle_notification
 
 return M

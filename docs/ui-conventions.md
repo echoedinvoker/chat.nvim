@@ -342,7 +342,7 @@ of the text below it.
 | New message in **current** chat | Buffer append | Handled by messages.lua append flow |
 | Edit / retraction in **current** chat | Buffer redraw | `render_full` with the cursor preserved; retracted text renders as italic `_[訊息已收回]_` so it reads as absence rather than as something the sender typed |
 | New message in **other** chat | Chat list update + statusline badge | Update `[●]` marker, increment badge count |
-| Connection status change | Statusline | `[reconnecting]` / `[disconnected]` (connected shows unreads or nothing) |
+| Connection status change | Statusline | `[daemon offline]` / `[reconnecting]` / `[disconnected]` (connected shows unreads or nothing) |
 | Send success/failure | Virtual text extmark | Temporary extmark near composer area, auto-clear after 3s |
 | Error (daemon not running, etc.) | Virtual text in chat list | Persistent until resolved |
 
@@ -350,12 +350,18 @@ of the text below it.
 
 Expose `require('chat-nvim').statusline()` returning a string:
 - `💬 3` — 3 chats with unread messages (based on client-side `last_read` tracking)
+- `[daemon offline]` — the poll failed at the socket layer: the daemon process is not there
+  (F60). Distinct from `[reconnecting]` because it can last until someone starts it
 - `[reconnecting]` — the daemon's session went away (it restarted) and the sidecar is
   rebuilding: new `initialize`, every subscription again, fresh SSE stream
 - `[disconnected]` — sidecar not connected to daemon
 - Empty string — no unreads, connected
 
-Users integrate this into their own statusline config (lualine, heirline, etc.).
+The four are mutually exclusive: one variable, last write wins. `statusline()` is a lookup,
+not a precedence decision.
+
+Users integrate this into their own statusline config (lualine, heirline, etc.) — see the
+README for copy-pasteable lualine and built-in statusline snippets.
 
 #### Why recovery gets its own state (F53)
 
@@ -373,9 +379,17 @@ The wording of the give-up message follows F34: it says the sidecar could not re
 asks whether the daemon is running. It does **not** claim the daemon has stopped — the
 sidecar cannot see that, and a wrong diagnosis sends the user looking in the wrong place.
 
-⚠️ Whether the user actually *sees* any of this is a separate, open problem: `statusline()`
-only shows up if it has been wired into a statusline, and `show_error_in_chat_list` returns
-silently when no chat list buffer exists. Tracked as F55.
+#### Being seen is its own guarantee (F55)
+
+A state being correct and a user seeing it were, for a while, two different things here, and
+only the first was tested. `statusline()` shows nothing unless it has been wired in, so the
+README now carries copy-pasteable snippets for lualine and the built-in statusline. And a
+standing condition no longer depends on one buffer existing: `notify.set_persistent_notice`
+holds it in the module, puts it on the chat list or — failing that — the messages buffer, and
+`chat_list.render()` puts it back after a redraw has replaced every line.
+
+Asserted mechanically in `scripts/f60-offline-signal-check.lua`, including the redraw and the
+both-buffers-closed case.
 
 ### Virtual text extmarks
 

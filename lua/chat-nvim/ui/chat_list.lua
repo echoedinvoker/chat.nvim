@@ -51,6 +51,11 @@ function M.render()
   for _, hl in ipairs(hl_ranges) do
     vim.api.nvim_buf_add_highlight(bufnr, ns, hl.hl or "DiagnosticInfo", hl.line, hl.col, hl.col + hl.len)
   end
+
+  -- F55: the set_lines above replaces every line, and extmarks go with the lines they were
+  -- anchored to. A standing notice ("the daemon is not running") has to be put back, or it
+  -- disappears on the next redraw and reads as the outage having ended.
+  require("chat-nvim.ui.notify").reapply_notice()
 end
 
 function M.open()

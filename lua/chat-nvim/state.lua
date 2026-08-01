@@ -2,7 +2,10 @@ local M = {}
 
 M.chats = {}           -- Chat[] from list_chats
 M.messages = {}        -- {[chat_id] = Message[]}
-M.connection = "disconnected" -- "connected" | "reconnecting" | "disconnected"
+-- Four mutually exclusive states in one variable, last write wins. "reconnecting" is the
+-- sidecar rebuilding a session against a daemon that is alive; "daemon_unreachable" is the
+-- daemon not being there at all, which can last until someone starts it (F60).
+M.connection = "disconnected" -- "connected" | "reconnecting" | "daemon_unreachable" | "disconnected"
 M.current_chat = nil   -- chat_id or nil
 M.last_read = {}       -- {[chat_id] = timestamp} client-side unread tracking
 M.banners = {}         -- {[chat_id] = string} history notice shown above the messages
