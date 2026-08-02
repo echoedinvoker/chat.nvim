@@ -37,10 +37,17 @@ local function check(label, cond)
   io.write((cond and "ok   " or "FAIL ") .. label .. "\n")
 end
 
-local ns = vim.api.nvim_create_namespace("chat_nvim_notice")
+--- Is the standing notice up on the window showing `buf`?
+---
+--- F62 moved the standing notice from an extmark to the winbar — a contract change, not a
+--- test bent to fit: a virtual line cannot be drawn above line 0 at all, and an overlay ate
+--- the first chat. This reads the new carrier and still fails for the same reason it always
+--- did, namely the notice not being there.
 local function notice_count(buf)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return 0 end
-  return #vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, {})
+  local win = vim.fn.bufwinid(buf)
+  if win == -1 then return 0 end
+  return (vim.wo[win].winbar ~= "") and 1 or 0
 end
 
 -- The chat list has to exist first, so check 2 measures "survives a redraw" and not

@@ -43,31 +43,18 @@ local function check(label, cond)
   io.write((cond and "ok   " or "FAIL ") .. label .. "\n")
 end
 
-local notice_ns = vim.api.nvim_create_namespace("chat_nvim_notice")
-
-local function notice_marks()
+--- The standing notice's text, or "". F62 moved the carrier to the winbar: a virtual line
+--- above line 0 is never drawn, and an overlay ate the first chat.
+local function notice_text()
   local buf = chat_list.get_bufnr()
-  if not buf or not vim.api.nvim_buf_is_valid(buf) then return {} end
-  return vim.api.nvim_buf_get_extmarks(buf, notice_ns, 0, -1, { details = true })
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then return "" end
+  local win = vim.fn.bufwinid(buf)
+  if win == -1 then return "" end
+  return vim.wo[win].winbar
 end
 
 local function notice_count()
-  return #notice_marks()
-end
-
---- The notice text, however it is carried. F62 turns virt_text/overlay into virt_lines, so
---- reading only one of them would make this script silently stop asserting halfway through
---- Phase 5.
-local function notice_text()
-  local mark = notice_marks()[1]
-  if not mark then return "" end
-  local d = mark[4] or {}
-  local out = {}
-  for _, chunk in ipairs(d.virt_text or {}) do out[#out + 1] = chunk[1] end
-  for _, line in ipairs(d.virt_lines or {}) do
-    for _, chunk in ipairs(line) do out[#out + 1] = chunk[1] end
-  end
-  return table.concat(out)
+  return notice_text() ~= "" and 1 or 0
 end
 
 local notify = init._test_handle_notification
