@@ -63,6 +63,63 @@ local function format_messages(messages)
   return lines, rows
 end
 
+--- Park the view at the newest message with the space reserved under it on screen too.
+---
+--- Moving the cursor to the last buffer line is not enough. image.nvim reserves an image's
+--- height as virt_lines hanging off an extmark, and virt_lines are not buffer lines: nvim
+--- will happily call the last line visible while the picture below it runs off under the
+--- statusline. `specs` is image.plan's output — `spec.row` is a 0-based buffer row and
+--- `spec.height` is in terminal cells.
+---
+--- Two timings have to come out the same, because the reservation and this call race:
+---   * magick already came back — the virt_lines exist, nvim_win_text_height counts them
+---   * magick is still working — the height exists only in the spec, so it is added here
+--- Handling only the first is handling only the case where the image was already cached.
+---
+--- The height a spec is worth here is `spec.height`, which holds only while image.lua calls
+--- from_file without `render_offset_top` or `overlap` — image.nvim reserves
+--- get_reserved_lines(height, render_offset_top, overlap) rows, which equals height only in
+--- that case (checked against image.nvim@88351f1f). Add either option to image.lua and this
+--- arithmetic goes quietly wrong with no assertion to catch it.
+local function scroll_to_bottom(win, bufnr, specs)
+  local count = vim.api.nvim_buf_line_count(bufnr)
+  local win_h = vim.api.nvim_win_get_height(win)
+
+  -- Which specs have not had their virt_lines written yet. nvim_win_text_height can only
+  -- see the ones that exist, so these are the ones this function has to account for.
+  local pending = {}   -- 0-based row -> height
+  for _, s in ipairs(specs) do
+    pending[s.row] = s.height
+  end
+  for _, m in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, -1, 0, -1, { details = true })) do
+    local row, det = m[2], m[4]
+    if det and det.virt_lines and #det.virt_lines > 0 and pending[row] then
+      pending[row] = nil
+    end
+  end
+
+  -- The smallest topline whose screen rows down to the last line still fit. Searched from
+  -- the bottom up so the loop is bounded by the window height, not by the buffer's length,
+  -- and stopped at the first overflow: one line further up is one line off the bottom.
+  local best = count
+  for t = count, 1, -1 do
+    local ok, th = pcall(vim.api.nvim_win_text_height, win,
+      { start_row = t - 1, end_row = count - 1 })
+    if not ok then break end
+    local extra = 0
+    for row, h in pairs(pending) do
+      -- spec rows are 0-based, toplines are 1-based.
+      if row + 1 >= t then extra = extra + h end
+    end
+    if th.all + extra > win_h then break end
+    best = t
+  end
+
+  vim.api.nvim_win_call(win, function()
+    vim.fn.winrestview({ topline = best, lnum = count, col = 0 })
+  end)
+end
+
 --- opts.keep_cursor: stay where the reader was instead of jumping to the newest message.
 --- Used when a redraw is caused by an edit or retraction somewhere above, which is not a
 --- reason to yank the reader down to the bottom.
@@ -136,7 +193,8 @@ function M.render_full(chat_id, opts)
   end
   state.msg_rows[chat_id] = { by_id = by_id, by_row = by_row }
 
-  image.apply(image.plan(messages, msg_rows), bufnr, winnr)
+  local specs = image.plan(messages, msg_rows)
+  image.apply(specs, bufnr, winnr)
 
   if not win_valid then return end
 
@@ -158,12 +216,19 @@ function M.render_full(chat_id, opts)
   if saved then
     -- A retraction shortens the buffer, so the old line may no longer exist.
     pcall(vim.api.nvim_win_set_cursor, winnr, saved)
-    return
+  else
+    -- Scroll to bottom on initial load
+    vim.api.nvim_win_set_cursor(winnr, { vim.api.nvim_buf_line_count(bufnr), 0 })
   end
 
-  -- Scroll to bottom on initial load
-  local count = vim.api.nvim_buf_line_count(bufnr)
-  vim.api.nvim_win_set_cursor(winnr, { count, 0 })
+  -- Both branches above can land on the last line, and neither of them can see the virtual
+  -- lines hanging under it — a keep_cursor redraw of a reader already at the bottom is what
+  -- every late-media arrival looks like. So the compensation is attached to where the view
+  -- ended up, not to which branch put it there. The preserve_view branch returned above on
+  -- purpose: its whole job is to leave the window alone.
+  if vim.api.nvim_win_get_cursor(winnr)[1] == vim.api.nvim_buf_line_count(bufnr) then
+    scroll_to_bottom(winnr, bufnr, specs)
+  end
 end
 
 function M.append(chat_id, new_messages)
@@ -178,18 +243,32 @@ function M.append(chat_id, new_messages)
   local line_count = vim.api.nvim_buf_line_count(bufnr)
   local at_bottom = cursor[1] >= line_count - 2
 
+  if at_bottom then
+    -- F66: appending lines cannot draw a picture. render_full is the only place that calls
+    -- image.plan/image.apply, so an arrival that took this path used to show up as
+    -- `[sticker:…]` with nothing under it — the symptom that got filed as a sidecar bug.
+    --
+    -- The images cannot be planned locally instead: image.apply clears everything live and
+    -- redraws exactly what it is handed (image.lua:92-95), so passing only the new
+    -- message's specs would wipe every picture already on screen. Rewriting the buffer from
+    -- state is the cheaper of the two, and state already holds the new messages —
+    -- init.lua runs state.append_messages before it calls here.
+    --
+    -- This gives up append's "only touch the new lines" advantage. Deliberate: render_full
+    -- is already what every `changed` push runs, and a picture that is never drawn is not
+    -- an optimisation.
+    M.render_full(chat_id)
+    return
+  end
+
   local new_lines = format_messages(new_messages)
 
   vim.bo[bufnr].modifiable = true
   vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, new_lines)
   vim.bo[bufnr].modifiable = false
 
-  if at_bottom then
-    local new_count = vim.api.nvim_buf_line_count(bufnr)
-    vim.api.nvim_win_set_cursor(win, { new_count, 0 })
-  else
-    pcall(vim.api.nvim_win_set_cursor, win, cursor)
-  end
+  -- The reader is scrolled up reading something; an arrival is not a reason to move them.
+  pcall(vim.api.nvim_win_set_cursor, win, cursor)
 end
 
 --- One rung of the paging ladder. `before` is a timestamp and core's filter is a strict
