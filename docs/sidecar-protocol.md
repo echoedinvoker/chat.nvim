@@ -161,11 +161,40 @@ the failure shape this project keeps rediscovering.
 flight against a single 3s budget for the whole page; anything still outstanding when the
 budget lapses comes back as `pending`. One slow image must never hold a page of text hostage.
 
-**A `pending` image resolves itself (F43).** The stragglers keep being fetched in the
+**A `pending` image resolves itself (F43, F57).** The stragglers keep being fetched in the
 background, and when they land the sidecar pushes one `resource_updated` for that chat
 carrying only those messages — the same notification the event tail uses, so Lua's existing
 `handle_resource_updated` turns it into one redraw. `state.differs()` compares `media.state`
 and `media.path` explicitly, so `pending → ready` is a redraw trigger in its own right.
+
+**Both entry points do this, and they say so differently.** `resolveMedia` has two callers
+and F43 wired the callback into only one of them, which left the push path resolving media
+under a deadline with nothing behind it — a picture that missed the budget there stayed
+`pending` forever, and reopening the chat was the only cure (that path goes through
+`readMessages`). F57 wired up the second one:
+
+| Caller | Situation | Log line |
+|---|---|---|
+| `readMessages` (`mcp-client.ts`) | opening a chat, `[` for older messages | `[sidecar] late media: N image(s) for <uri>` |
+| `pushEvents` (`subscription.ts`) | a live arrival off the event tail | `[sidecar] late media (push): N image(s) for <uri>` |
+
+The `(push)` is load-bearing, not decoration: on screen a picture the push path filled in
+and one the user filled in by reopening the chat are the same picture, so acceptance for
+this can only be done by reading the log. Anything that greps for late media must decide
+which of the two it means.
+
+The late push repeats the main push's subscription filter rather than trusting its caller —
+the tail is global, so the rows can belong to a chat this Neovim has never opened, and the
+callback fires seconds after the loop that dropped that chat has moved on. It carries
+neither `banner` (a missing banner means "leave it alone"; an empty one wipes the history
+line) nor `msg_timestamp` (that feeds Lua's `log_latency()`, which measures *new messages*
+arriving — a redraw that adds none would be recorded as delivery lag).
+
+⚠️ Worth knowing before you rely on the push path: the 3s budget is hard to miss in
+practice. Three attempts on a live daemon — 12 media, 17.7 MB, all cold, all in the first
+batch after a reconnect — resolved in at most 1.8s. The defect is real and the callback is
+now in place, but no observed sample has ever hit it. "A daemon restart necessarily blows
+the budget" was assumed when F57 was filed and did not survive measurement.
 
 ⚠️ This paragraph used to end "…and fills in on the next redraw", which was wishful: nothing
 ever triggered one. A cold page stayed on `[圖片載入中…]` indefinitely and the only thing that

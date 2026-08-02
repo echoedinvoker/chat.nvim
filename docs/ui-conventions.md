@@ -88,28 +88,42 @@ All keymaps are **buffer-local** (set with `{buffer = bufnr}`). No global keymap
 
 ## Append without flicker
 
-When new messages arrive via push notification, append to the messages buffer without disrupting the user's reading position:
+When new messages arrive via push notification, the reader's position decides what happens.
+The two branches are not variations on one another — they run different code paths:
 
 ```lua
--- 1. Save cursor state
-local win = vim.fn.bufwinid(buf)
 local cursor = vim.api.nvim_win_get_cursor(win)
-local at_bottom = cursor[1] >= vim.api.nvim_buf_line_count(buf) - 2
+local at_bottom = cursor[1] >= vim.api.nvim_buf_line_count(bufnr) - 2
 
--- 2. Append new lines
-vim.bo[buf].modifiable = true
-vim.api.nvim_buf_set_lines(buf, -1, -1, false, new_lines)
-vim.bo[buf].modifiable = false
-
--- 3. Scroll policy
 if at_bottom then
-  -- User was at bottom → auto-scroll to show new message
-  vim.api.nvim_win_set_cursor(win, { vim.api.nvim_buf_line_count(buf), 0 })
-else
-  -- User was reading history → restore cursor, don't force scroll
-  pcall(vim.api.nvim_win_set_cursor, win, cursor)
+  -- Full redraw, not an append. See below for why.
+  M.render_full(chat_id)
+  return
 end
+
+-- Reading history: append the new lines and put the cursor back where it was.
+vim.bo[bufnr].modifiable = true
+vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, new_lines)
+vim.bo[bufnr].modifiable = false
+pcall(vim.api.nvim_win_set_cursor, win, cursor)
 ```
+
+**Appending lines cannot draw a picture (F66).** `image.plan` / `image.apply` have exactly
+one call site, inside `render_full`. For as long as the at-bottom branch appended lines of
+its own, every pushed image landed as `[sticker:…]` or `[image]` text with nothing under
+it — nine out of nine media messages across two samples, `media.state` already `ready` and
+the file already on disk. It was filed as a sidecar bug for three days, because the symptom
+is identical to media that never resolved.
+
+Planning the new message's images locally instead is the obvious repair and is wrong:
+`image.apply` clears everything live and draws exactly what it is handed, so passing only
+the new specs wipes every picture already on screen. Redrawing from state is the cheaper of
+the two, and state already holds the new messages — `init.lua` calls `state.append_messages`
+before it calls here.
+
+This gives up append's "only touch the new lines" advantage. That is a deliberate trade:
+`render_full` is already what every `changed` push runs, and a picture that is never drawn
+is not an optimisation.
 
 Dedup: track message IDs in state. On update, append messages whose `id` is not already
 in the list.
@@ -315,6 +329,25 @@ makes placement testable without a terminal.
 - **Render after the lines are in place.** image.nvim anchors on an extmark keyed by
   `buffer:row:col`; an image placed before `nvim_buf_set_lines` is anchored to rows that
   are about to be replaced.
+- **Scrolling to the last buffer line does not bring the last picture on screen (F58).**
+  The space under a message is virtual lines, and `nvim_buf_line_count` cannot see them, so
+  `nvim_win_set_cursor(win, { count, 0 })` parks the cursor on a line Neovim considers
+  visible while the picture below it runs off under the statusline — measured at 74 screen
+  rows against a window of 62, of which 60 were filler. Use `nvim_win_text_height()`, which
+  counts wrapped lines and existing virt_lines both, and search upwards for the smallest
+  topline that still fits.
+  Two timings have to give the same answer, because the reservation and the scroll race:
+  when `magick` has already returned, `nvim_win_text_height` sees the rows and Neovim would
+  have got there on its own; when it has not, the height exists only in the spec and has to
+  be added by hand. Handling only the first is handling only the already-cached case.
+  The compensation belongs wherever the view ended up, **not** in one branch: a
+  `keep_cursor` redraw lands on the last line too, and that is the branch every late-media
+  redraw takes. `preserve_view` is the exception — leaving the window alone is that
+  branch's entire job, and compensating would undo the anchor `[` just restored.
+  Expect a gap under the last picture sometimes. The chosen topline is the smallest one
+  that fits, so how close it lands to the bottom depends on the height of whatever sits
+  above: text scrolls a row at a time and lands flush, another image moves in blocks of its
+  own height and cannot.
 - **Clear the previous draw before the next one.** Same reason: a leftover image keeps
   reserving space at a row that now holds different text.
 - Heights are fixed per content type (`ui/image.lua`), not derived from the image, so a

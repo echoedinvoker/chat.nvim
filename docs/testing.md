@@ -87,7 +87,7 @@ test (F61).
 
 **None. Any red is a real failure.**
 
-Measured 2026-08-02, daemon healthy, `cd sidecar && bun test`: 170 pass, 0 fail across 11
+Measured 2026-08-02, daemon healthy, `cd sidecar && bun test`: 174 pass, 0 fail across 11
 files — integration included.
 
 This section exists because "that one is just flaky" is a category that absorbs real
@@ -161,6 +161,7 @@ nvim --headless -l scripts/f34-anchor-check.lua; echo "exit=$?"        # prints 
 nvim --headless -l scripts/f35-image-spec-check.lua; echo "exit=$?"    # prints ALL PASS: 16/16
 nvim --headless -l scripts/f9-banner-guard-check.lua; echo "exit=$?"   # prints PASS: 3/3
 nvim --headless -l scripts/f43-media-redraw-check.lua; echo "exit=$?"  # prints ALL PASS
+nvim --headless -l scripts/f58-viewport-check.lua; echo "exit=$?"      # prints ALL PASS
 nvim --headless -l scripts/f36-search-jump-check.lua; echo "exit=$?"   # prints OK: 19/19
 nvim --headless -l scripts/f38-attachment-open-check.lua; echo "exit=$?" # prints OK: 11/11
 nvim --headless -l scripts/f60-offline-signal-check.lua; echo "exit=$?" # prints PASS: 10/10
@@ -213,12 +214,26 @@ Neovim with a real UI inside tmux and greps `capture-pane`: the notice is on scr
 first chat is still on screen, and the notice's row number is *lower* than the first chat's.
 Where a check can read the characters a user would see, it should.
 
-**Know what these scripts cannot see.** The fake renderer produces no virtual lines, so
+**Know what these scripts cannot see.** `f35`'s fake renderer produces no virtual lines, so
 anything about how much space an image actually occupies on screen is invisible to it. A
 version of this feature reserved real blank lines *and* let image.nvim reserve virtual
 ones, leaving a second gap under every picture the same height as the picture — both
 scripts stayed green throughout, and a person spotted it in seconds. Mechanical assertions
 own placement; a human owns whether the screen looks right.
+
+`f58-viewport-check.lua` is where that blind spot got narrowed: its stub renderer sets a
+real `virt_lines` extmark, so `nvim_win_text_height()` can be asserted against the window
+height and "the last picture is on screen" stops being a matter of opinion. It runs the
+same fixture under both timings — reservation already written, and reservation still only
+in the spec — because the second one is the case that was broken and the first one is the
+case a fix can accidentally break. Scenario C (a chat with no images) and scenario F (`[`
+prepending a page) exist for that second reason and are green before and after.
+
+What it still cannot see is whether the picture is legible, sized sensibly, or pleasant to
+read. It asserts an inequality; the screen is the reader's call. Scenario G is the shape to
+copy when adding to it: `image.rendered()` must contain the message id **and** the viewport
+inequality must hold. The inequality alone passes trivially while nothing is drawn at all,
+which is exactly the bug F66 turned out to be — nothing that does not exist can overflow.
 
 **A stub replaces the slowest part of the system, so no stubbed script can see time.**
 `f38-attachment-open-check.lua` was green at 7/7 while every uncached Telegram attachment
