@@ -247,7 +247,7 @@ describe("session loss during a drain", () => {
     });
   }
 
-  test("it reconnects, resubscribes, and reopens the stream", async () => {
+  test("it reconnects and resubscribes — reopening the stream is the supervisor's job", async () => {
     const reconnect = mock(() => Promise.resolve());
     const subscribe = mock(() => Promise.resolve());
     const openSseStream = mock(() =>
@@ -268,7 +268,11 @@ describe("session loss during a drain", () => {
 
     expect(reconnect).toHaveBeenCalledTimes(1);
     expect(subscribe).toHaveBeenCalledTimes(2);       // both defaults, again
-    expect(openSseStream).toHaveBeenCalled();
+    // Contract change (F63, decision A). This asserted `toHaveBeenCalled()` before: recovery
+    // used to open its own stream. `runSseSupervisor` is already looping, and it picks up the
+    // new session id on its next open — so a stream opened here would be a *second* one
+    // running against the same session. This inversion is decision A's mechanical proof.
+    expect(openSseStream).not.toHaveBeenCalled();
   });
 
   test("two detectors racing produce one reconnect, not two sessions", async () => {

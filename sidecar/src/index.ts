@@ -109,10 +109,11 @@ async function main(): Promise<void> {
   // connects, correctness is already covered. The stream is a latency hint on top of it.
   subMgr.startPollLoop();
 
-  subMgr.startSseLoop().catch((err) => {
-    console.error(`[sidecar] SSE error: ${describeError(err)}`);
-    emitNotification("disconnected", { reason: String(err) });
-  });
+  // The supervisor owns the stream's whole lifetime, so there is nothing to catch here: a
+  // failed open is its own next cycle's problem. Nothing is emitted on failure either — the
+  // connection-lost notification that used to live here was the source of the statusline
+  // permanently stuck saying so on a daemon that was alive and polling fine (F63, decision B).
+  subMgr.startSseSupervisor();
 
   const reader = Bun.stdin.stream().getReader();
   const decoder = new TextDecoder();

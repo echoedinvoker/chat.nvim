@@ -225,8 +225,10 @@ the number in the hint and the number fetched cannot drift apart.
 |--------|--------|------|
 | `resource_updated` | `{uri, sidecar_received_at, ...data}` | A subscribed MCP resource changed. Sidecar fetches the data itself and includes it inline (see below). |
 | `connected` | `{}` | Sidecar successfully connected to chatmux daemon. |
-| `disconnected` | `{reason: string}` | Connection to daemon lost. |
-| `reconnecting` | `{}` | The daemon's session is gone (it restarted) and the sidecar is rebuilding: new `initialize`, then every subscription again, then a fresh SSE stream. A `connected` follows on success. |
+| `disconnected` | `{reason: string}` | The sidecar process itself exited (emitted by Lua's `sidecar.lua` on process exit, not by the sidecar). **Since F63 the SSE stream ending no longer emits this** — a dead stream is a latency change, not a lost connection. A daemon that is genuinely gone surfaces as `daemon_unreachable` instead, detected by the poll. |
+| `reconnecting` | `{}` | The daemon's session is gone (it restarted) and the sidecar is rebuilding: new `initialize`, then every subscription again. A `connected` follows on success. The SSE stream is not reopened here — the supervisor does that on its own next cycle, using the new session id. |
+| `sse_degraded` | `{consecutive_failures: number, poll_ms: number}` | The SSE stream failed to reopen `SSE_DEGRADED_AFTER` (3) times in a row. Low-latency push is off; delivery continues via the poll, up to `poll_ms` behind. `poll_ms` is sent rather than assumed because `CHATMUX_POLL_MS` is configurable — a UI that hardcodes 15s would start lying the moment it is changed. |
+| `sse_restored` | `{}` | A reopen succeeded after a `sse_degraded`. Only sent if a `sse_degraded` was sent first. |
 | `reconnect_failed` | `{attempts: number}` | Recovery gave up after `attempts` tries. The sidecar is still alive and the poll keeps running, so a later attempt can still succeed — but nothing will update until it does. |
 | `error` | `{message: string}` | Non-fatal error (e.g. subscription failure). |
 
@@ -372,10 +374,21 @@ costs latency, not correctness.
 
 - **JSON parse failure on stdin**: Log to stderr, skip the line, do not crash.
 - **MCP request failure**: Return `{"id": N, "error": {"message": "..."}}` to Lua.
-- **SSE stream disconnection**: Emit `disconnected`. The stream is *not* reopened from here —
-  when the daemon dies the read ends cleanly and there is nothing to reconnect to yet.
+- **SSE stream ends or throws**: reopened by the supervisor (`runSseSupervisor`), which owns the
+  stream's whole lifetime — one loop, started once from `index.ts`. A stream that *ended* was
+  open, so the next attempt is immediate; a stream that could not be *opened* backs off
+  (0, 1s, 2s, 4s… capped at 15s, because a reopen slower than the poll underneath it would make
+  the fast path slower than its own floor). No notification either way until three consecutive
+  open failures, which emits `sse_degraded`; the next success emits `sse_restored`.
+  **It never emits `disconnected`.** The stream is a latency hint on top of the poll, so losing
+  it means slower, not gone.
+- **Daemon actually gone**: detected by the poll, never by the stream — a reopen against a dead
+  daemon just fails and backs off, it does not classify the outage. `isDaemonUnreachable` in the
+  drain's catch is the only detector, and it emits `daemon_unreachable`.
 - **Daemon restarted (session gone)**: the poll is the detector, not SSE. Its next tick gets
-  `-32000 Session not found`, which triggers `initialize` → resubscribe every uri → reopen SSE,
-  announced as `reconnecting` and then `connected`. The event cursor is kept: core encodes it
-  as a SQLite `messages.seq`, so it survives the restart.
+  `-32000 Session not found`, which triggers `initialize` → resubscribe every uri, announced as
+  `reconnecting` and then `connected`. The stream is *not* reopened here: the supervisor is
+  already looping and picks up the new session id on its next cycle, whereas opening one here
+  too would leave two streams running against the same session. The event cursor is kept: core
+  encodes it as a SQLite `messages.seq`, so it survives the restart.
 - **Socket not found**: Emit `error` notification with clear message, exit with non-zero code.

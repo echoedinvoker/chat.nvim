@@ -353,7 +353,8 @@ Expose `require('chat-nvim').statusline()` returning a string:
 - `[daemon offline]` — the poll failed at the socket layer: the daemon process is not there
   (F60). Distinct from `[reconnecting]` because it can last until someone starts it
 - `[reconnecting]` — the daemon's session went away (it restarted) and the sidecar is
-  rebuilding: new `initialize`, every subscription again, fresh SSE stream
+  rebuilding: new `initialize`, then every subscription again. The SSE stream is not part of
+  this any more (F63): its supervisor reopens it independently, on the new session id
 - `[disconnected]` — sidecar not connected to daemon
 - Empty string — no unreads, connected
 

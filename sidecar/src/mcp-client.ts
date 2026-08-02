@@ -315,7 +315,17 @@ export class McpClient {
         ...(this.sessionId ? { "mcp-session-id": this.sessionId } : {}),
       },
       unix: this.socketPath,
-    } as RequestInit);
+      // Bun 1.3.9's fetch applies a 300s default request timeout, and an SSE stream is a
+      // request that is *supposed* to stay open with nothing on it. Measured 2026-08-02: a
+      // quiet stream died at 300.0s every time, unaffected by other traffic on the same
+      // client (so it is not an idle timeout); with the deadline disabled below it was still
+      // alive past 1200s. An `AbortSignal` cannot express this — a signal only *adds* a way to abort, so
+      // `AbortSignal.timeout(1h)` still died at 300.0s. Deliberately not applied to
+      // `rawRequest`: a POST should have a deadline, and removing it would let one stuck tool
+      // call hang the drain loop forever. `timeout` is not in bun-types' RequestInit, hence
+      // the double assertion.
+      timeout: false,
+    } as unknown as RequestInit);
 
     if (!res.body) throw new Error("SSE stream: no response body");
     return res.body;

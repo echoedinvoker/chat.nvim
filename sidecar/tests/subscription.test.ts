@@ -141,13 +141,14 @@ describe("SubscriptionManager", () => {
     expect(client.subscribe).toHaveBeenCalledTimes(2);
   });
 
-  test("startSseLoop emits disconnected when stream ends", async () => {
+  // Contract change (F63, decision B): this used to assert the opposite. The stream is a
+  // latency hint sitting on top of the poll, so losing it means "slower", never "gone" —
+  // the old assertion pinned that lie in place.
+  test("a stream that ends is not a disconnect", async () => {
     const client = createMockClient();
     const mgr = new SubscriptionManager(client, handler);
     await mgr.startSseLoop();
-    expect(notifications).toEqual([
-      { method: "disconnected", params: { reason: "SSE stream ended" } },
-    ]);
+    expect(notifications.map((n) => n.method)).not.toContain("disconnected");
   });
 
   test("startSseLoop handles resource_updated with pre-fetch", async () => {
@@ -178,8 +179,9 @@ describe("SubscriptionManager", () => {
     await mgr.subscribeDefaults();
     await mgr.startSseLoop();
 
-    // should have: resource_updated + disconnected
-    expect(notifications.length).toBe(2);
+    // resource_updated only. Was 2 before F63, when the stream's end added a `disconnected`
+    // (decision B).
+    expect(notifications.length).toBe(1);
     expect(notifications[0]!.method).toBe("resource_updated");
     expect(notifications[0]!.params.uri).toBe("chat://chats");
     expect(notifications[0]!.params.chats).toEqual([
@@ -213,10 +215,9 @@ describe("SubscriptionManager", () => {
     await mgr.subscribeDefaults();
     await mgr.startSseLoop();
 
-    // only disconnected, no resource_updated for unknown URI
-    expect(notifications).toEqual([
-      { method: "disconnected", params: { reason: "SSE stream ended" } },
-    ]);
+    // Nothing at all: an unsubscribed uri is not pushed, and since F63 the stream's own end
+    // is not announced either (decision B). Before F63 this expected one `disconnected`.
+    expect(notifications).toEqual([]);
     expect(client.readResource).not.toHaveBeenCalled();
   });
 

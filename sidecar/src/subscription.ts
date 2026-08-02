@@ -14,6 +14,7 @@ import {
   backoffMs,
   MAX_RECONNECT_ATTEMPTS,
 } from "./reconnect.ts";
+import { sseReopenDelayMs, SSE_DEGRADED_AFTER } from "./sse-supervisor.ts";
 
 export type NotificationHandler = (
   method: string,
@@ -61,6 +62,10 @@ export class SubscriptionManager {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   /** A recovery is in flight. Two of them would open two sessions and strand the first. */
   private reconnecting = false;
+  /** Consecutive failures to *open* a stream. Any success resets it — a threshold, not decay. */
+  private sseFailures = 0;
+  /** Whether the user has already been told push is off. A latch, like `daemonUnreachable`. */
+  private sseDegraded = false;
 
   constructor(
     client: McpClient,
@@ -152,7 +157,85 @@ export class SubscriptionManager {
       reader.releaseLock();
     }
 
-    this.onNotify("disconnected", { reason: "SSE stream ended" });
+    // Returning is not an error and is deliberately silent: the stream ending means the
+    // latency hint went away, not that anything was lost. `runSseSupervisor` reopens it.
+    // This used to emit `disconnected` — the lie F63 exists to delete (decision B).
+  }
+
+  /**
+   * Keeps exactly one SSE stream alive for the life of the process. Started once, from
+   * `index.ts`; `recoverSession()` deliberately does NOT open its own, or two streams would
+   * run in parallel against the same session (decision A).
+   *
+   * Not awaited by its caller — like `startPollLoop`, this is background work.
+   */
+  startSseSupervisor(): void {
+    void this.runSseSupervisor({});
+  }
+
+  /** Named for the seam it is: a test hook, not public API (cf. `_test_pollOnce`). */
+  _test_runSseSupervisor = (
+    opts: { maxCycles?: number; sleep?: (ms: number) => Promise<void> } = {},
+  ): Promise<void> => this.runSseSupervisor(opts);
+
+  /**
+   * Open → run until the stream ends or throws → back off → open again, forever.
+   *
+   * The two outcomes are not symmetric. A stream that *ended* got opened, so the failure
+   * count resets and the next open is immediate. A stream that could not be *opened* is
+   * what backs off, and three of those in a row (`SSE_DEGRADED_AFTER`) is when the user is
+   * finally told — by then it is ~3s of no push, past the point where it could still be one
+   * flaky attempt.
+   *
+   * What it never emits is `disconnected`. Delivery correctness belongs to the poll
+   * (`startPollLoop`); this stream is a latency hint, so losing it means "slower", never
+   * "gone" (decision B).
+   *
+   * `maxCycles` and `sleep` exist only for tests: without them a test either waits on real
+   * backoff or never returns.
+   */
+  private async runSseSupervisor(opts: {
+    maxCycles?: number;
+    sleep?: (ms: number) => Promise<void>;
+  }): Promise<void> {
+    const sleep = opts.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+    for (let cycle = 0; opts.maxCycles == null || cycle < opts.maxCycles; cycle += 1) {
+      const wait = sseReopenDelayMs(this.sseFailures);
+      if (wait > 0) await sleep(wait);
+
+      const startedAt = Date.now();
+      try {
+        await this.startSseLoop();
+        this.sseFailures = 0;
+        if (this.sseDegraded) {
+          this.sseDegraded = false;
+          console.error("[sidecar] sse reopened");
+          this.onNotify("sse_restored", {});
+        }
+        // The success path has no backoff by design (a clean end must not cost a second),
+        // which leaves it with no floor at all: a peer that accepts the stream and closes it
+        // immediately would turn this into an unthrottled reopen loop against the daemon —
+        // F53's 960-identical-failures flood in a new costume. One reopen per second is
+        // slack enough to be free and still 15x faster than the poll underneath it.
+        const elapsed = Date.now() - startedAt;
+        if (elapsed < 1_000) await sleep(1_000 - elapsed);
+      } catch (err) {
+        this.sseFailures += 1;
+        console.error(
+          `[sidecar] sse reopen failed (${this.sseFailures}): ${describeError(err)}`,
+        );
+        if (this.sseFailures >= SSE_DEGRADED_AFTER && !this.sseDegraded) {
+          this.sseDegraded = true;
+          // The interval is read here and shipped to Lua rather than hardcoded there: it is
+          // configurable, and a UI that says "15s" while the env says otherwise is a new lie
+          // in the place F63 just removed one (decision E).
+          this.onNotify("sse_degraded", {
+            consecutive_failures: this.sseFailures,
+            poll_ms: Number(process.env.CHATMUX_POLL_MS ?? 15_000),
+          });
+        }
+      }
+    }
   }
 
   private async handleSseMessage(msg: any): Promise<void> {
@@ -248,10 +331,11 @@ export class SubscriptionManager {
       // *second* outage silent.
       this.clearDaemonUnreachable();
     } catch (err) {
-      // F53: by Phase 0.2 Q3 the poll is the only detector left once the daemon dies — the SSE
-      // loop ends on the spot and nothing reopens it. So a dead session surfaces here and
-      // nowhere else, and retrying "next trigger" would retry forever against an id the daemon
-      // has never heard of (measured: 960 identical failures over four hours).
+      // F53: the poll is the only detector once the daemon dies. Since F63 the SSE stream is
+      // reopened by `runSseSupervisor`, but that changes nothing here: a reopen against a dead
+      // daemon just fails and backs off, it never classifies the outage. So a dead session
+      // still surfaces here and nowhere else, and retrying "next trigger" would retry forever
+      // against an id the daemon has never heard of (measured: 960 failures over four hours).
       if (isSessionGone(err)) {
         await this.recoverSession();
         return;
@@ -322,12 +406,10 @@ export class SubscriptionManager {
         }
 
         await this.resubscribeAll();
-        // Not awaited, same as the initial start: the loop only returns when the stream ends.
-        void this.startSseLoop().catch((err) => {
-          console.error(
-            `[sidecar] SSE loop failed after reconnect: ${describeError(err)}`,
-          );
-        });
+        // No stream is opened here on purpose (decision A). The supervisor is already
+        // looping, and `client.reconnect()` has just written the new session id into the
+        // client — so the supervisor's *next* open picks it up by itself. Opening one here
+        // too would leave two streams running against the same session.
         console.error("[sidecar] reconnected");
         // Recovery path ②: the daemon came back and the session did not survive it. Lower the
         // latch here rather than calling clearDaemonUnreachable() — the `connected` below is

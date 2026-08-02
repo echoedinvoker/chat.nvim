@@ -42,6 +42,8 @@ export type NotificationMethod =
   | "reconnecting"
   | "reconnect_failed"
   | "daemon_unreachable"
+  | "sse_degraded"
+  | "sse_restored"
   | "error";
 
 export type OutgoingMessage = Response | Notification;
