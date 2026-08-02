@@ -375,6 +375,142 @@ describe("SubscriptionManager", () => {
     };
   }
 
+  test("late media from the push path pushes its own redraw (F57)", async () => {
+    let fireLate: (() => void) | null = null;
+    const resolveMedia = mock((rows: any[], _chatId: string, onLate?: (m: Map<string, any>) => void) => {
+      // The snapshot carries the first row only; the second one arrives after the
+      // deadline, which is what a cold cache does on every reconnect.
+      fireLate = () => onLate?.(new Map([[rows[1].id, { path: "/tmp/cached/late.png" }]]));
+      return Promise.resolve(new Map([[rows[0].id, { path: "/tmp/cached/first.png" }]]));
+    });
+    const client = createTailClient({
+      resolveMedia,
+      readEvents: mock(() => Promise.resolve({
+        events: [
+          imageEv("evt:101", "telegram:AAA", "telegram:1"),
+          imageEv("evt:102", "telegram:AAA", "telegram:2"),
+        ],
+        next_cursor: "evt:102", head_cursor: "evt:102", has_more: false,
+      })),
+      openSseStream: mock(() =>
+        Promise.resolve(sseOf(NOTIFY("chat://chats/telegram:AAA/messages")))),
+    });
+    const mgr = newManager(client);
+    await mgr.subscribeChat("telegram:AAA");
+    await mgr.startSseLoop();
+
+    const before = notifications.filter((n) => n.method === "resource_updated").length;
+    expect(before).toBe(1);
+
+    fireLate!();
+
+    const updates = notifications.filter((n) => n.method === "resource_updated");
+    expect(updates.length).toBe(2);
+    const late = updates[1]!.params as any;
+    expect(late.uri).toBe("chat://chats/telegram:AAA/messages");
+    expect(late.messages.map((m: any) => m.id)).toEqual(["telegram:2"]);
+    expect(late.messages[0].media).toEqual({ state: "ready", path: "/tmp/cached/late.png" });
+  });
+
+  test("late media for an unsubscribed chat is dropped, like the main push (F57)", async () => {
+    let fireLate: (() => void) | null = null;
+    const resolveMedia = mock((rows: any[], _chatId: string, onLate?: (m: Map<string, any>) => void) => {
+      fireLate = () => onLate?.(new Map([[rows[0].id, { path: "/tmp/cached/late.png" }]]));
+      return Promise.resolve(new Map());
+    });
+    const client = createTailClient({
+      resolveMedia,
+      readEvents: mock(() => Promise.resolve({
+        events: [imageEv("evt:101", "telegram:ZZZ", "telegram:1")],
+        next_cursor: "evt:101", head_cursor: "evt:101", has_more: false,
+      })),
+      openSseStream: mock(() =>
+        Promise.resolve(sseOf(NOTIFY("chat://chats/telegram:AAA/messages")))),
+    });
+    const mgr = newManager(client);
+    await mgr.subscribeChat("telegram:AAA");   // ZZZ is deliberately never subscribed
+    await mgr.startSseLoop();
+
+    fireLate!();
+
+    expect(notifications.filter((n) =>
+      n.method === "resource_updated" &&
+      (n.params as any).uri === "chat://chats/telegram:ZZZ/messages")).toEqual([]);
+  });
+
+  test("a late push carries neither banner nor msg_timestamp (F57)", async () => {
+    let fireLate: (() => void) | null = null;
+    const resolveMedia = mock((rows: any[], _chatId: string, onLate?: (m: Map<string, any>) => void) => {
+      fireLate = () => onLate?.(new Map([[rows[1].id, { path: "/tmp/cached/late.png" }]]));
+      return Promise.resolve(new Map([[rows[0].id, { path: "/tmp/cached/first.png" }]]));
+    });
+    const client = createTailClient({
+      resolveMedia,
+      readEvents: mock(() => Promise.resolve({
+        events: [
+          imageEv("evt:101", "telegram:AAA", "telegram:1"),
+          imageEv("evt:102", "telegram:AAA", "telegram:2"),
+        ],
+        next_cursor: "evt:102", head_cursor: "evt:102", has_more: false,
+      })),
+      openSseStream: mock(() =>
+        Promise.resolve(sseOf(NOTIFY("chat://chats/telegram:AAA/messages")))),
+    });
+    const mgr = newManager(client);
+    await mgr.subscribeChat("telegram:AAA");
+    await mgr.startSseLoop();
+
+    fireLate!();
+
+    const late = notifications.filter((n) => n.method === "resource_updated")[1]!.params as any;
+    // An empty banner would clear F34's history line; msg_timestamp would hand
+    // log_latency() a redraw that carried no new message and call it delivery lag.
+    expect("banner" in late).toBe(false);
+    expect("msg_timestamp" in late).toBe(false);
+    expect(typeof late.sidecar_received_at).toBe("number");
+  });
+
+  test("the push path's late log is distinguishable from readMessages' (F57)", async () => {
+    let fireLate: (() => void) | null = null;
+    const resolveMedia = mock((rows: any[], _chatId: string, onLate?: (m: Map<string, any>) => void) => {
+      fireLate = () => onLate?.(new Map([[rows[1].id, { path: "/tmp/cached/late.png" }]]));
+      return Promise.resolve(new Map([[rows[0].id, { path: "/tmp/cached/first.png" }]]));
+    });
+    const client = createTailClient({
+      resolveMedia,
+      readEvents: mock(() => Promise.resolve({
+        events: [
+          imageEv("evt:101", "telegram:AAA", "telegram:1"),
+          imageEv("evt:102", "telegram:AAA", "telegram:2"),
+        ],
+        next_cursor: "evt:102", head_cursor: "evt:102", has_more: false,
+      })),
+      openSseStream: mock(() =>
+        Promise.resolve(sseOf(NOTIFY("chat://chats/telegram:AAA/messages")))),
+    });
+    const mgr = newManager(client);
+    await mgr.subscribeChat("telegram:AAA");
+    await mgr.startSseLoop();
+
+    // Captured around fireLate only: the manager logs plenty on the way here, and the
+    // claim is about the one line the late push writes.
+    const lines: string[] = [];
+    const orig = console.error;
+    console.error = (...a: unknown[]) => { lines.push(a.join(" ")); };
+    try {
+      fireLate!();
+    } finally {
+      console.error = orig;
+    }
+
+    // Acceptance reads this log to tell which path filled a picture in. If the two lines
+    // were spelled the same, reopening the chat during acceptance would look like the push
+    // path working.
+    const hits = lines.filter((l) => l.includes("late media"));
+    expect(hits.length).toBe(1);
+    expect(hits[0]).toContain("late media (push): 1 image(s) for chat://chats/telegram:AAA/messages");
+  });
+
   test("an edited image resolves its media instead of pushing a loading placeholder", async () => {
     const resolveMedia = mock((rows: any[]): Promise<Map<string, any>> =>
       Promise.resolve(new Map(rows.map((r) => [r.id, { path: "/tmp/cached/img-1.png" }])))

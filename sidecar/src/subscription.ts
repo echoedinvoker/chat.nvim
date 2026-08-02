@@ -549,7 +549,16 @@ export class SubscriptionManager {
     }
     const mediaByChat = new Map<string, Map<string, MediaResult>>();
     for (const [chatId, rows] of mediaRowsByChat) {
-      mediaByChat.set(chatId, await this.client.resolveMedia(rows, chatId));
+      // F57: the third argument is what readMessages has had since F43 and this path did
+      // not. A page's media shares one deadline, so whatever has not resolved when it
+      // expires is simply absent from the snapshot — toMessage reads that as `pending` and
+      // Lua prints "[圖片載入中…]" with nothing behind it to ever change its mind. On the
+      // resource path a straggler pushes its own redraw; here it stayed pending forever.
+      // The reconnect path makes that the common case rather than an edge one: after a
+      // daemon restart the whole batch is a cold cache.
+      mediaByChat.set(chatId, await this.client.resolveMedia(
+        rows, chatId, (late) => this.pushLateMedia(chatId, rows, late),
+      ));
     }
 
     const byChat = new Map<string, McpMessageRaw[]>();
@@ -584,6 +593,45 @@ export class SubscriptionManager {
         ...(latest > 0 && { msg_timestamp: latest }),
       });
     }
+  }
+
+  /**
+   * The redraw a straggling picture pushes for itself, once the deadline that left it out
+   * of the main push has passed.
+   *
+   * It repeats the main push's subscription filter rather than trusting the caller: the
+   * tail is global, so `rows` can belong to a chat this Neovim has never opened, and the
+   * late callback fires seconds after the loop that dropped it moved on.
+   *
+   * The payload deliberately carries neither key the main push carries:
+   *   - `banner`, because Lua reads a missing banner as "leave it alone" and an empty one
+   *     would wipe F34's history line
+   *   - `msg_timestamp`, because it feeds log_latency(), which measures arrival of *new*
+   *     messages. A late redraw adds none — counting it would report the media deadline as
+   *     if it were delivery lag.
+   */
+  private pushLateMedia(
+    chatId: string,
+    rows: McpMessageRaw[],
+    late: Map<string, MediaResult>,
+  ): void {
+    const uri = `chat://chats/${chatId}/messages`;
+    if (!this.subscribedUris.has(uri)) return;
+
+    const messages = rows
+      .filter((m) => late.has(m.id))
+      .map((m) => toMessage(m, chatId, late.get(m.id)));
+    if (messages.length === 0) return;
+
+    // "(push)" is not decoration. On screen, a picture this path filled in and one the user
+    // filled in by reopening the chat are the same picture — the log is the only thing that
+    // says which. readMessages' line (index.ts) omits the word, so a grep separates them.
+    console.error(`[sidecar] late media (push): ${messages.length} image(s) for ${uri}`);
+    this.onNotify("resource_updated", {
+      uri,
+      sidecar_received_at: Date.now(),
+      messages,
+    });
   }
 
   private transformResourceData(uri: string, data: unknown): Record<string, unknown> {
