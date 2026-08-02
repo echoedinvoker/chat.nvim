@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeAll } from "bun:test";
 import { McpClient } from "../src/mcp-client.ts";
+import { waitFor } from "./support/wait-for.ts";
 
 describe("integration: real chatmux daemon", () => {
   let client: McpClient;
@@ -39,17 +40,26 @@ describe("integration: real chatmux daemon", () => {
 
     expect(sendResult.success).toBe(true);
 
-    // Give daemon a moment to persist
-    await Bun.sleep(500);
+    // A real Telegram round trip has no predictable upper bound — least of all just after
+    // the daemon restarts, while the adapter is still backfilling. The old `sleep(500)` then
+    // read once could only ever guess, and when it guessed low it failed for a reason that
+    // had nothing to do with the code under test (F61). What changed is the waiting, not the
+    // expectation: the message still has to come back.
+    const found = await waitFor(
+      async () => {
+        const { messages } = await client.readMessages({ chat_id: chat!.id, limit: 5 });
+        return messages.find((m) => m.text === marker);
+      },
+      {
+        timeoutMs: 25_000,
+        intervalMs: 500,
+        label: `message "${marker}" to come back through read_messages`,
+      },
+    );
 
-    const { messages } = await client.readMessages({
-      chat_id: chat!.id,
-      limit: 5,
-    });
-
-    const found = messages.find((m) => m.text === marker);
-    expect(found).toBeDefined();
-    expect(found!.chat_id).toBe(chat!.id);
-    expect(found!.timestamp).toBeGreaterThan(0);
-  });
+    expect(found.chat_id).toBe(chat!.id);
+    expect(found.timestamp).toBeGreaterThan(0);
+    // Deliberately longer than waitFor's own deadline, so a timeout reports what it was
+    // waiting for instead of bun's information-free "test timed out".
+  }, 30_000);
 });

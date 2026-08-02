@@ -74,6 +74,33 @@ cd sidecar && bun test tests/integration.test.ts
 
 Integration tests are not run in CI (no daemon available). They are run manually during development.
 
+The delivery test waits by polling with a deadline, not by sleeping a guessed amount. It
+sends a marker, then re-reads the chat every 500ms for up to 25 seconds (`tests/support/
+wait-for.ts`), and the test's own timeout is 30 seconds so that a failure reports what it
+was waiting for rather than bun's information-free "test timed out". A real Telegram round
+trip has no predictable upper bound — least of all just after a daemon restart, while the
+adapter is still backfilling — so the previous `sleep(500)` then read once could only guess,
+and when it guessed low it failed for a reason that had nothing to do with the code under
+test (F61).
+
+### Tests allowed to be red
+
+**None. Any red is a real failure.**
+
+Measured 2026-08-02, daemon healthy, `cd sidecar && bun test`: 170 pass, 0 fail across 11
+files — integration included.
+
+This section exists because "that one is just flaky" is a category that absorbs real
+failures. If a test ever earns a place on this list, it goes here by name, with what its red
+looks like and why it is allowed — never as a blanket exemption. An empty list is the
+maintained state, not an oversight.
+
+Note that a green suite is not the same as a verified change. Three of the checks under
+[Lua verification](#lua-verification) exist because a mechanical assertion passed while the
+screen was wrong: `virt_lines_above` on line 0 creates a valid extmark that Neovim never
+draws, and the shape-of-the-extmark assertion could not tell the difference. Assert what a
+user would see wherever that is possible.
+
 ## Mock vs Real boundary
 
 | What | Mock OK | Must be real |
@@ -136,6 +163,10 @@ nvim --headless -l scripts/f9-banner-guard-check.lua; echo "exit=$?"   # prints 
 nvim --headless -l scripts/f43-media-redraw-check.lua; echo "exit=$?"  # prints ALL PASS
 nvim --headless -l scripts/f36-search-jump-check.lua; echo "exit=$?"   # prints OK: 19/19
 nvim --headless -l scripts/f38-attachment-open-check.lua; echo "exit=$?" # prints OK: 11/11
+nvim --headless -l scripts/f60-offline-signal-check.lua; echo "exit=$?" # prints PASS: 10/10
+nvim --headless -l scripts/f63-degraded-signal-check.lua; echo "exit=$?" # prints ALL PASS
+nvim --headless -l scripts/f62-notice-anchor-check.lua; echo "exit=$?"  # prints ALL PASS
+bash scripts/f62-notice-onscreen-check.sh; echo "exit=$?"               # prints ALL PASS
 ```
 
 `f9-banner-guard-check.lua` stubs only the sidecar and sets `state.current_chat = nil`, so
@@ -163,6 +194,24 @@ open (same seam as `image.set_renderer`) and asserts the four paths `o` has: a v
 reaches the opener via `fetch_media` with `chat_id` attached, a text line neither fetches
 nor opens, an `unavailable` shows the sidecar's wording and opens nothing, and a second
 press while a fetch is in the air neither re-requests nor re-opens.
+
+`f63-degraded-signal-check.lua` runs nine transitions through one accumulating state
+machine, in order, with no reset between them — the order is itself what is under test.
+Three of them are the same invariant from three directions: the supervisor's reopen timer,
+the poll timer and `recoverSession` are independent clocks, so `sse_restored` can arrive
+while the connection is still unreachable, `connected` can arrive before `sse_restored`, and
+`sse_degraded` can land mid-reconnect. In each case the status line and the notice have to
+agree — `[polling]` with nothing on screen explaining it, or a standing "daemon is not
+running" wiped by a delivery update, are both the screen lying.
+
+`f62-notice-anchor-check.lua` and `f62-notice-onscreen-check.sh` are two layers of the same
+check and neither replaces the other. **The first one was ALL PASS while the screen was
+empty.** It asserted the shape of the extmark that had been created — and `virt_lines_above`
+anchored at line 0 creates a perfectly valid extmark that Neovim has nowhere to draw and
+silently never renders. "Created" and "drawn" are different claims. So the `.sh` runs a real
+Neovim with a real UI inside tmux and greps `capture-pane`: the notice is on screen, the
+first chat is still on screen, and the notice's row number is *lower* than the first chat's.
+Where a check can read the characters a user would see, it should.
 
 **Know what these scripts cannot see.** The fake renderer produces no virtual lines, so
 anything about how much space an image actually occupies on screen is invisible to it. A
