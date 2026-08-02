@@ -10,6 +10,7 @@
 
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { describeError } from "./describe-error.ts";
 
 export class CursorStore {
   constructor(private readonly filePath: string) {
@@ -37,7 +38,7 @@ export class CursorStore {
     } catch (err) {
       // Losing the cursor costs a resync from head after a restart. Letting the write
       // failure escape would cost the whole push pipeline, which is worse.
-      console.error("[sidecar] cursor save failed:", err);
+      console.error(`[sidecar] cursor save failed: ${describeError(err)}`);
     }
   }
 }

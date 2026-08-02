@@ -7,6 +7,7 @@ import type {
   MediaResult,
 } from "./types.ts";
 import { CursorStore, defaultCursorPath } from "./cursor-store.ts";
+import { describeError } from "./describe-error.ts";
 import {
   isSessionGone,
   isDaemonUnreachable,
@@ -268,7 +269,9 @@ export class SubscriptionManager {
         return;
       }
       // The cursor has not advanced past whatever failed, so the next trigger retries it.
-      console.error("[sidecar] event tail drain failed, retrying next trigger:", err);
+      console.error(
+        `[sidecar] event tail drain failed, retrying next trigger: ${describeError(err)}`,
+      );
     } finally {
       this.draining = false;
       this.drainAgain = false;
@@ -312,14 +315,18 @@ export class SubscriptionManager {
         try {
           await this.client.reconnect();
         } catch (err) {
-          console.error(`[sidecar] reconnect attempt ${attempt} failed:`, err);
+          console.error(
+            `[sidecar] reconnect attempt ${attempt} failed: ${describeError(err)}`,
+          );
           continue;
         }
 
         await this.resubscribeAll();
         // Not awaited, same as the initial start: the loop only returns when the stream ends.
         void this.startSseLoop().catch((err) => {
-          console.error("[sidecar] SSE loop failed after reconnect:", err);
+          console.error(
+            `[sidecar] SSE loop failed after reconnect: ${describeError(err)}`,
+          );
         });
         console.error("[sidecar] reconnected");
         // Recovery path ②: the daemon came back and the session did not survive it. Lower the

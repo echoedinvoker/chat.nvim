@@ -1,6 +1,7 @@
 import { McpClient, shouldUseListAll } from "./mcp-client.ts";
 import { SubscriptionManager } from "./subscription.ts";
 import type { ListChatsParams, Request, RequestMethod } from "./types.ts";
+import { describeError } from "./describe-error.ts";
 
 function emit(obj: Record<string, unknown>): void {
   console.log(JSON.stringify(obj));
@@ -109,7 +110,7 @@ async function main(): Promise<void> {
   subMgr.startPollLoop();
 
   subMgr.startSseLoop().catch((err) => {
-    console.error("[sidecar] SSE error:", err);
+    console.error(`[sidecar] SSE error: ${describeError(err)}`);
     emitNotification("disconnected", { reason: String(err) });
   });
 
@@ -133,7 +134,7 @@ async function main(): Promise<void> {
       try {
         req = parseRequest(trimmed);
       } catch (err) {
-        console.error("[sidecar] JSON parse error:", err);
+        console.error(`[sidecar] JSON parse error: ${describeError(err)}`);
         continue;
       }
 
@@ -159,7 +160,7 @@ async function main(): Promise<void> {
 // for `dispatch`) must not open a daemon connection or start reading stdin.
 if (import.meta.main) {
   main().catch((err) => {
-    console.error("[sidecar] fatal:", err);
+    console.error(`[sidecar] fatal: ${describeError(err)}`);
     process.exit(1);
   });
 }
