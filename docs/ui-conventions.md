@@ -343,6 +343,7 @@ of the text below it.
 | Edit / retraction in **current** chat | Buffer redraw | `render_full` with the cursor preserved; retracted text renders as italic `_[訊息已收回]_` so it reads as absence rather than as something the sender typed |
 | New message in **other** chat | Chat list update + statusline badge | Update `[●]` marker, increment badge count |
 | Connection status change | Statusline | `[daemon offline]` / `[reconnecting]` / `[disconnected]` (connected shows unreads or nothing) |
+| Delivery mode change | Statusline + persistent notice | `[polling]` plus a notice naming how far behind messages can now be. Only while the connection is healthy — see "Statusline component" (F63) |
 | Send success/failure | Virtual text extmark | Temporary extmark near composer area, auto-clear after 3s |
 | Error (daemon not running, etc.) | Virtual text in chat list | Persistent until resolved |
 
@@ -356,10 +357,22 @@ Expose `require('chat-nvim').statusline()` returning a string:
   rebuilding: new `initialize`, then every subscription again. The SSE stream is not part of
   this any more (F63): its supervisor reopens it independently, on the new session id
 - `[disconnected]` — sidecar not connected to daemon
+- `[polling]` — the connection is healthy but low-latency push is off: the SSE stream failed
+  to reopen three times running, so messages arrive on the poll instead, up to `poll_ms`
+  behind (F63). Delivery, not connection
 - Empty string — no unreads, connected
 
-The four are mutually exclusive: one variable, last write wins. `statusline()` is a lookup,
-not a precedence decision.
+The four **connection** states are mutually exclusive: one variable, last write wins, and
+their relative order in `statusline()` is readability. Delivery is a second variable
+(`state.delivery`), orthogonal to connection, because when the daemon restarts "the daemon is
+gone" and "the stream will not reopen" are both true and one variable would let them
+overwrite each other by arrival order (F63 decision D).
+
+Where delivery sits **is** a precedence decision: `[polling]` is checked after all three
+connection states, so a user whose daemon is down reads `[daemon offline]` — the thing they
+can act on — instead of being told push is degraded, which by then is noise.
+`scripts/f63-degraded-signal-check.lua` asserts that ordering; moving it is a behaviour
+change.
 
 Users integrate this into their own statusline config (lualine, heirline, etc.) — see the
 README for copy-pasteable lualine and built-in statusline snippets.

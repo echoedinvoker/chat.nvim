@@ -10,7 +10,7 @@ M.connection = "disconnected" -- "connected" | "reconnecting" | "daemon_unreacha
 -- daemon is gone" and "the SSE stream will not open" are true at the same time; in one
 -- last-write-wins variable they would overwrite each other and which one survived would
 -- depend on the arrival order of two independent notifications (F63 decision D). The stream
--- is only a latency hint — the 15s poll is what makes delivery correct — so its death means
+-- is only a latency hint — the poll below is what makes delivery correct — so its death means
 -- "slower", never "disconnected".
 M.delivery = "push"    -- "push" | "polling"
 -- The poll interval the sidecar actually runs with (CHATMUX_POLL_MS), sent along with

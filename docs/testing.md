@@ -253,3 +253,26 @@ Phase 4 adds timestamp-based latency tracking:
 - Target: p95 full-chain < 2 seconds
 - Note: `msg_timestamp` vs `sidecar_received_at` spans machines (possible clock skew). `sidecar_received_at` vs `lua_rendered_at` is local IPC, same machine.
 - Use `vim.loop.gettimeofday()` for Lua timing — NOT `vim.loop.now()` (monotonic, can't compare with epoch)
+
+### Proving the stream delivered it, not the poll
+
+`/tmp/chat-nvim-latency.log` measures how long delivery took. It does not say **which of the
+two triggers** delivered, and that is the only question worth asking after any change to the
+stream: the poll alone is enough to make messages appear, so "the message showed up" passes
+just as well on a completely dead stream. F60's acceptance passed that way.
+
+Two readings answer it, and neither needs to know the second you pressed send:
+
+1. **Off-tick arrival.** Start the sidecar with a poll interval far wider than the latency you
+   expect (`CHATMUX_POLL_MS=120000`). The poll is a `setInterval`, so its ticks are at
+   `t0 + n × interval` where `t0` is the `poll interval: …ms` line in the log. A message that
+   lands tens of seconds away from every tick cannot have come from the poll.
+2. **Ingest-to-screen.** `~/.local/share/chatmux/chatmux.db` stores `created_at` in
+   milliseconds (`select created_at from messages where content_text = …`). Compare it against
+   the moment the text appears on screen — read that with `tmux capture-pane`, not from a
+   screenshot or a hand-held stopwatch. Push lands inside ~100ms; the poll cannot.
+
+Set the override **before** Neovim starts, and confirm it took by finding the
+`[sidecar] poll interval: 120000ms` line — an override that was silently dropped and an
+override that worked look identical from the outside, and "no evidence it failed" is not
+evidence it applied.

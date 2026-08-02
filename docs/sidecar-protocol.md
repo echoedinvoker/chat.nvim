@@ -367,8 +367,8 @@ resource is the chat list's only update source — its ordering, unread hints an
 `last_message` preview all come from there. Routing it through the tail would freeze the
 list, which is the same bug in a different place.
 
-A timer drains the same tail every 15s regardless of SSE (see above), so SSE going quiet
-costs latency, not correctness.
+A timer drains the same tail every `CHATMUX_POLL_MS` (15s by default) regardless of SSE (see
+above), so SSE going quiet costs latency, not correctness.
 
 ## Error handling
 

@@ -299,8 +299,11 @@ function M.refresh_chats()
 end
 
 function M.statusline()
-  -- The four states live in one variable and only one can hold at a time, so the order of
-  -- these checks is readability, not precedence — there is no priority logic here to preserve.
+  -- The four *connection* states live in one variable and only one can hold at a time, so
+  -- their relative order is readability. Delivery is a second, orthogonal variable (F63
+  -- decision D), and where it sits relative to them IS precedence — see the comment above
+  -- the [polling] branch. Reordering that one is a behaviour change, not a tidy-up;
+  -- scripts/f63-degraded-signal-check.lua asserts it.
   if state.connection == "daemon_unreachable" then
     -- Distinct from [reconnecting] on purpose: that one means "the sidecar is alive and
     -- working on it, back in a moment"; this one can last until someone starts the daemon.

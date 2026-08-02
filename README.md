@@ -68,7 +68,8 @@ when the daemon has stopped.
 | `💬 3` | three chats have unread messages |
 | `[daemon offline]` | the sidecar reached the socket and found nothing listening — the daemon is not running (`systemctl --user start chatmux`) |
 | `[reconnecting]` | the daemon restarted and the sidecar is rebuilding its session; nothing is asked of you |
-| `[disconnected]` | the sidecar itself is not connected |
+| `[disconnected]` | the sidecar process itself stopped (its own exit, not a stream or socket problem) |
+| `[polling]` | connected and still delivering, but low-latency push is off — messages arrive on the poll, up to `CHATMUX_POLL_MS` behind |
 | `""` | connected, nothing unread |
 
 **lualine** — note that `sections` replaces lualine's defaults outright instead of merging,
@@ -181,11 +182,12 @@ tools and resources this plugin consumes) or
   your phone.
 - **One daemon, one slot.** If you also run `line-tui`, stop it first — both occupy the same LINE
   device slot.
-- **A daemon outage is silent while it lasts.** Restart the daemon and the sidecar picks itself up
-  on the next poll (within ~15s) — no need to restart Neovim. But while the daemon is actually
-  down there is no on-screen sign of it: the buffer simply stops changing. The reason is that a
-  missing socket is not the same as a lost session, and only the latter is something to recover
-  from. Check `~/.local/state/nvim/chat-nvim.log` if the chats have gone quiet.
+- **A daemon outage announces itself and clears itself.** While the daemon is down the
+  statusline reads `[daemon offline]` and the chat list carries a standing notice (F60); the
+  buffer going quiet is no longer the only sign. Restart the daemon and the sidecar picks
+  itself up on the next poll — the notice disappears on its own, no need to restart Neovim.
+  Both the detection and the recovery are the poll's, not the SSE stream's, so how fast the
+  display catches up follows `CHATMUX_POLL_MS` (~15s by default).
 
 ## Development
 

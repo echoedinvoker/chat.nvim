@@ -286,6 +286,10 @@ export class SubscriptionManager {
   startPollLoop(): void {
     if (this.pollTimer != null) return;
     const ms = Number(process.env.CHATMUX_POLL_MS ?? 15_000);
+    // Printed, not assumed: an acceptance run that widens this interval to prove the stream
+    // (not the poll) is what delivered a message has no way to tell "the override took" from
+    // "the override was silently dropped" unless the effective value shows up in the log.
+    console.error(`[sidecar] poll interval: ${ms}ms`);
     this.pollTimer = setInterval(() => {
       void this._test_pollOnce();
     }, ms);

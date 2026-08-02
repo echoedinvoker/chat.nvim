@@ -86,7 +86,7 @@ comparing against the copy already in state, not by the notification itself.
 1. **Start**: Lua calls `vim.fn.jobstart({'bun', 'run', sidecar_path})` on first `:ChatList`
 2. **Initialize**: Sidecar connects to daemon via unix socket, performs MCP handshake
 3. **Subscribe**: Subscribes to `chat://chats` and `chat://status` resources
-4. **Run**: Reads stdin for requests, dispatches to MCP, writes responses to stdout. SSE stream delivers push notifications to stdout.
+4. **Run**: Reads stdin for requests, dispatches to MCP, writes responses to stdout. Two triggers deliver pushes: a poll every `CHATMUX_POLL_MS` (correctness) and an SSE stream on top of it (latency). A supervisor owns the stream's whole lifetime and reopens it with backoff whenever it ends or throws, so the stream dying is a slowdown, never a disconnection — see `docs/sidecar-protocol.md` for the failure modes.
 5. **Dynamic subscribe**: On `read_messages` request, auto-subscribes to that chat's messages resource
 6. **Crash recovery**: Lua `on_exit` callback auto-restarts sidecar (max 3 times, increasing delay)
 7. **Stop**: `:ChatClose` or Neovim exit → `vim.fn.jobstop(job_id)`
