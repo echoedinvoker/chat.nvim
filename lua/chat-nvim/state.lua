@@ -6,6 +6,16 @@ M.messages = {}        -- {[chat_id] = Message[]}
 -- sidecar rebuilding a session against a daemon that is alive; "daemon_unreachable" is the
 -- daemon not being there at all, which can last until someone starts it (F60).
 M.connection = "disconnected" -- "connected" | "reconnecting" | "daemon_unreachable" | "disconnected"
+-- Delivery is deliberately *not* a fifth value of M.connection. When the daemon dies, "the
+-- daemon is gone" and "the SSE stream will not open" are true at the same time; in one
+-- last-write-wins variable they would overwrite each other and which one survived would
+-- depend on the arrival order of two independent notifications (F63 decision D). The stream
+-- is only a latency hint — the 15s poll is what makes delivery correct — so its death means
+-- "slower", never "disconnected".
+M.delivery = "push"    -- "push" | "polling"
+-- The poll interval the sidecar actually runs with (CHATMUX_POLL_MS), sent along with
+-- sse_degraded so the notice can state a real number instead of a hardcoded 15.
+M.poll_ms = 15000
 M.current_chat = nil   -- chat_id or nil
 M.last_read = {}       -- {[chat_id] = timestamp} client-side unread tracking
 M.banners = {}         -- {[chat_id] = string} history notice shown above the messages
@@ -222,6 +232,12 @@ function M.reset()
   M.older_hint = {}
   M.msg_rows = {}
   M.connection = "disconnected"
+  -- Reopening the UI in the same Neovim session starts a fresh sidecar whose sseFailures is
+  -- back at 0, so it will never send sse_restored. A delivery left at "polling" would keep
+  -- the statusline saying [polling] until some later real degradation happened to clear it —
+  -- the same "the screen is lying" shape this round exists to remove.
+  M.delivery = "push"
+  M.poll_ms = 15000
   M.current_chat = nil
 end
 

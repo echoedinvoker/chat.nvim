@@ -113,11 +113,43 @@ local function check_adapter_status()
   end)
 end
 
+-- The single production point for the delivery notice. F63: the stream is only a latency
+-- hint, so this says "slower", never "disconnected" — and the number comes from the sidecar
+-- (CHATMUX_POLL_MS), because a hardcoded 15 starts lying the moment anyone changes it.
+local function refresh_delivery_notice()
+  -- The persistent notice is a single slot (notify.lua:13). While the connection itself
+  -- is not healthy, that slot belongs to whoever is describing the connection —
+  -- daemon_unreachable owns it, reconnecting and disconnected are mid-flight. The
+  -- supervisor's reopen timer, the poll timer and recoverSession are three independent
+  -- clocks, so "sse_restored arrives while connection is still daemon_unreachable" is
+  -- routine, not exotic. Speaking here would wipe a message that is still true.
+  --
+  -- The invariant, stated once: the delivery notice only speaks when the connection is
+  -- healthy. Every other state re-enters through the `connected` branch below, which
+  -- calls this again once state.connection is already "connected".
+  if state.connection ~= "connected" then return end
+
+  if state.delivery == "polling" then
+    local secs = math.floor((state.poll_ms or 15000) / 1000)
+    require("chat-nvim.ui.notify").set_persistent_notice(
+      "low-latency push is off — still delivering, up to " .. secs .. "s behind")
+  else
+    require("chat-nvim.ui.notify").clear_persistent_notice()
+  end
+end
+
 local function handle_notification(method, params)
   if method == "connected" then
-    state.connection = "connected"
-    require("chat-nvim.ui.notify").clear_persistent_notice()
+    state.connection = "connected"   -- MUST come first: the guard above reads it
+    refresh_delivery_notice()
     check_adapter_status()
+  elseif method == "sse_degraded" then
+    state.delivery = "polling"
+    state.poll_ms = params.poll_ms or 15000
+    refresh_delivery_notice()
+  elseif method == "sse_restored" then
+    state.delivery = "push"
+    refresh_delivery_notice()
   elseif method == "daemon_unreachable" then
     state.connection = "daemon_unreachable"
     local notify = require("chat-nvim.ui.notify")
@@ -282,6 +314,12 @@ function M.statusline()
   end
   if state.connection == "disconnected" then
     return "[disconnected]"
+  end
+  -- Deliberately after all three connection states: delivery is orthogonal to connection
+  -- (F63 decision D), and when the daemon is gone "push is degraded" is noise — [daemon
+  -- offline] is what the user needs. Only a healthy connection gets to say [polling].
+  if state.delivery == "polling" then
+    return "[polling]"
   end
   local count = state.unread_count()
   if count > 0 then
