@@ -87,8 +87,10 @@ test (F61).
 
 **None. Any red is a real failure.**
 
-Measured 2026-08-02, daemon healthy, `cd sidecar && bun test`: 174 pass, 0 fail across 11
-files — integration included.
+Run `cd sidecar && bun test` with the daemon healthy for the current figure — integration
+included. A count written into this file is stale the day after it is written: this line
+said 170, then 174, and each number outlived the run that produced it. What is worth
+asserting here is not how many passed but that **zero failed**.
 
 This section exists because "that one is just flaky" is a category that absorbs real
 failures. If a test ever earns a place on this list, it goes here by name, with what its red

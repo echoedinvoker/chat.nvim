@@ -118,7 +118,7 @@ end
 local function photo(i, ts)
   return msg(i, ts, {
     content_type = "image",
-    text = "[image]",
+    text = "⟦image⟧",
     media = { state = "ready", path = "/cache/line/msg/" .. i .. ".jpg" },
   })
 end
@@ -197,6 +197,23 @@ local function tight(win, buf)
   local th = vim.api.nvim_win_text_height(win, { start_row = view.topline - 2, end_row = count - 1 })
   local win_h = vim.api.nvim_win_get_height(win)
   return th.all > win_h, ("one_more=" .. th.all .. " win_h=" .. win_h)
+end
+
+--- Where the last buffer line actually lands, read off the screen.
+---
+--- Deliberately not computed from nvim_win_text_height like `fits` is. Once topfill is in
+--- play that number is the wrong one — it counts a below-line block in full even when the
+--- window opens halfway down it — and the obvious correction (`th.all - block + topfill`)
+--- is the same arithmetic the code under test uses, so an assertion built on it would agree
+--- with a wrong implementation by construction. screenpos answers a different question with
+--- a different mechanism: which screen row is that line drawn on. Row 0 means "not drawn".
+local function last_line_row(win, buf)
+  local count = vim.api.nvim_buf_line_count(buf)
+  vim.cmd("redraw")
+  local pos = vim.api.nvim_win_call(win, function() return vim.fn.screenpos(win, count, 1) end)
+  local top = vim.fn.win_screenpos(win)[1]
+  local bottom = top + vim.api.nvim_win_get_height(win) - 1
+  return pos.row, bottom
 end
 
 local IMG_H = image.height_for("image")
@@ -289,6 +306,38 @@ local drawn = image.rendered()
 check("G: an appended image is actually drawn", drawn[arrival.id] ~= nil,
   "drawn=" .. vim.inspect(vim.tbl_keys(drawn)))
 check("G: an appended image fits the viewport", fits(winG, bufG, 0))
+
+--------------------------------------------------------------------------------
+-- H (F67): the chat ends on two pictures in a row
+--
+-- The gap only appears when the line above the topline carries one. Text creeps upward a
+-- row at a time and lands flush; a picture can only be taken whole, so one more line means
+-- twelve more rows, which overflows — and the search stops with empty rows under the last
+-- image. Scenarios A/B/E/G all happen to land on used == win_h already, so none of them
+-- exercise this: they would stay green with the compensation deleted.
+--
+-- Three assertions, and the first two are the ones that make the third mean anything:
+--   * nothing spills (the F58 invariant, which the fill must not buy its way out of)
+--   * topfill is non-zero — otherwise "flush" could be an accident of the fixture rather
+--     than anything this code did, which is the shape of false green this script has
+--     already produced once (four fixtures, one identical topline, all green)
+--   * nothing is left over
+--------------------------------------------------------------------------------
+
+image.set_renderer(stub(true))
+local pageH = page(6, nil, 500)
+table.insert(pageH, photo(595, 595000))
+table.insert(pageH, photo(596, 596000))
+pages["line:cH"] = { first = pageH }
+local bufH, winH = open("line:cH")
+
+local viewH = vim.api.nvim_win_call(winH, function() return vim.fn.winsaveview() end)
+local rowH, bottomH = last_line_row(winH, bufH)
+check("H: the last line is on screen at all", rowH > 0 and rowH <= bottomH,
+  ("last_line_row=" .. rowH .. " bottom=" .. bottomH))
+check("H: the fill actually ran", viewH.topfill > 0, "topfill=" .. viewH.topfill)
+check("H: the last line is flush with the bottom", rowH == bottomH,
+  ("last_line_row=" .. rowH .. " bottom=" .. bottomH .. " topfill=" .. viewH.topfill))
 
 --------------------------------------------------------------------------------
 

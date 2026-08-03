@@ -122,7 +122,7 @@ export class McpClient {
       params.chat_id,
       // F43: the images that miss the page budget used to be simply absent, and the comment
       // claiming they would be filled in "on the next redraw" was wishful — nothing
-      // triggered one, so a cold page stayed on [圖片載入中…] until the user scrolled away
+      // triggered one, so a cold page stayed on ⟦圖片載入中…⟧ until the user scrolled away
       // and back. Now the stragglers push one redraw of their own, carrying only themselves.
       (late) => {
         const handler = this.lateMediaHandler;
@@ -547,7 +547,7 @@ function itemTimeout(ms: number): { promise: Promise<typeof TIMED_OUT>; cancel: 
  * F43 is the difference from the F35 version: back then a missed image was simply absent
  * from the map, `toMessage` read that as `pending`, and the comment said it would be filled
  * in "on the next redraw" — which nothing ever triggered. So the first cold page of a chat
- * stayed on `[圖片載入中…]` forever and waiting was the one action that could not help.
+ * stayed on `⟦圖片載入中…⟧` forever and waiting was the one action that could not help.
  * Now the images that arrive after the snapshot come back through `onLate`, and the caller
  * turns that into exactly one redraw.
  *
@@ -636,16 +636,31 @@ const PLATFORM_LABELS: Record<string, string> = {
 };
 
 /**
+ * A placeholder is something the system says, not something anyone said. White square
+ * brackets exist on no keyboard layout, so a text message can no longer be mistaken for
+ * one — F59 was diagnosed for three days on exactly that confusion, and telling the two
+ * apart needed a sqlite query against content_type.
+ *
+ * This narrows accidental collisions to zero. It does not stop a deliberate one: pasting
+ * ⟦sticker:1/2⟧ still collides, and that is accepted.
+ */
+function placeholder(inner: string): string {
+  return `⟦${inner}⟧`;
+}
+
+/**
  * What a non-image attachment says on the line where its body would be.
  *
  * Type only. Neither platform gives us anything richer: core's `formatMessage` does not
  * expose `raw`, `messages` has no `file_name` column, and the `attachments` table is an
  * empty schema nothing writes to. A file name or size here would be invented.
+ *
+ * Bare words here, wrapped at the point of use, so the brackets have one origin.
  */
 const ATTACHMENT_LABEL: Record<string, string> = {
-  video: "[影片]",
-  audio: "[語音]",
-  file: "[檔案]",
+  video: "影片",
+  audio: "語音",
+  file: "檔案",
 };
 
 function platformLabel(messageId: string): string {
@@ -658,6 +673,12 @@ function platformLabel(messageId: string): string {
  *
  * Lives next to the other placeholders for the same reason they do: one origin. Lua
  * composing its own version of "gone" is how two vocabularies for the same state start.
+ *
+ * Keeps plain [..] on purpose while toMessage's placeholders moved to ⟦..⟧ (F65). These
+ * strings are shown by attachment.lua as a status line under the cursor, not as a line in
+ * the message panel — nothing anyone typed can ever appear in that position, so there is
+ * nothing here to be mistaken for. The brackets mark "the system is speaking" in a place
+ * where the user also speaks; that place is the panel.
  */
 function attachmentUnavailableText(reason: string, messageId: string): string {
   const label = platformLabel(messageId);
@@ -708,7 +729,7 @@ export function toMessage(
   // Retraction placeholder lives here alongside the sticker/image ones: core clears the
   // content on retraction, so without this Lua would render an empty line.
   if (retractedAt != null) {
-    text = "[訊息已收回]";
+    text = placeholder("訊息已收回");
   } else if (mediaState?.state === "gone") {
     // R3: a message the platform deleted must say so. Rendering nothing would be
     // indistinguishable from the plugin being broken — the exact failure shape F33 was.
@@ -716,29 +737,29 @@ export function toMessage(
     // photo is gone from LINE reads as a bug in the plugin, not as an explanation.
     const label = platformLabel(raw.id);
     text = raw.content.type === "sticker"
-      ? `[貼圖已不存在於 ${label}]`
-      : `[圖片已不存在於 ${label}]`;
+      ? placeholder(`貼圖已不存在於 ${label}`)
+      : placeholder(`圖片已不存在於 ${label}`);
   } else if (mediaState?.state === "pending") {
-    text = "[圖片載入中…]";
+    text = placeholder("圖片載入中…");
   } else if (raw.content.type === "text") {
     text = raw.content.text ?? "";
   } else if (raw.content.type === "sticker") {
     const c = raw.content as any;
-    text = `[sticker:${c.package_id ?? "?"}/${c.sticker_id ?? "?"}]`;
+    text = placeholder(`sticker:${c.package_id ?? "?"}/${c.sticker_id ?? "?"}`);
   } else if (raw.content.type === "image") {
-    text = "[image]";
+    text = placeholder("image");
   } else if (isAttachment) {
     // Wording lives here, not in Lua: the same single-origin rule as the sticker, image
     // and retraction placeholders above.
-    text = ATTACHMENT_LABEL[raw.content.type]!;
+    text = placeholder(ATTACHMENT_LABEL[raw.content.type]!);
   } else {
-    text = `[${raw.content.type}]`;
+    text = placeholder(raw.content.type);
   }
 
   // A photo's caption is part of what was said, so it belongs next to the placeholder rather
   // than being dropped. No branch above read it: before F40.2 a media message could not carry
   // text at all, so there was nothing to read. Retraction is the one exception — core clears
-  // the content, and "[訊息已收回] <caption>" would be showing what was withdrawn.
+  // the content, and "⟦訊息已收回⟧ <caption>" would be showing what was withdrawn.
   if (retractedAt == null && (isImageLike || isAttachment)) {
     const caption = (raw.content.text ?? "").trim();
     if (caption) text = `${text} ${caption}`;

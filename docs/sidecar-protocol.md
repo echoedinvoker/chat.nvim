@@ -57,9 +57,14 @@ or on error:
 {
   message: Message
   snippet: string       // ⚠️ two shapes, see below
-  chat_name: string
+  chat_name: string | null
 }
 ```
+
+`chat_name` is nullable because some chats were never named by the platform — a consumer
+that types it as plain `string` will render `nil` into the "which conversation was this"
+column the first time a hit comes from one. `SearchResultOut` in `sidecar/src/types.ts` is
+the authoritative shape.
 
 `total` is the full number of hits, counted in SQL — not the length of the returned page.
 
@@ -146,16 +151,41 @@ Every state's wording is decided in the sidecar, not in Lua. Lua renders what it
 
 | Condition | `media.state` | `text` |
 |---|---|---|
-| Retracted (wins over everything) | absent | `[訊息已收回]` |
-| Cached and ready | `ready` | unchanged (`[sticker:pkg/id]` / `[image]`) |
-| Not fetched yet, or the page's 3s budget lapsed | `pending` | `[圖片載入中…]` |
-| — any of the above, when the media message also carries text (F44) | unchanged | the caption is appended after the placeholder, one space between: `[image] 今天的貓`. Retraction is the exception: `[訊息已收回]` never gains a caption, because core has cleared the content |
-| Deleted on the platform's side | `gone` | `[圖片已不存在於 <平台>]` / `[貼圖已不存在於 <平台>]` — the platform is read off the message's own id, so a Telegram photo says Telegram |
-| Not media at all (`video` / `audio` / `file`) | absent | `[video]` etc., unchanged |
+| Retracted (wins over everything) | absent | `⟦訊息已收回⟧` |
+| Cached and ready | `ready` | unchanged (`⟦sticker:pkg/id⟧` / `⟦image⟧`) |
+| Not fetched yet, or the page's 3s budget lapsed | `pending` | `⟦圖片載入中…⟧` |
+| — any of the above, when the media message also carries text (F44) | unchanged | the caption is appended after the placeholder, one space between: `⟦image⟧ 今天的貓`. The caption stays outside the brackets, because it is the one part of the line somebody actually wrote. Retraction is the exception: `⟦訊息已收回⟧` never gains a caption, because core has cleared the content |
+| Deleted on the platform's side | `gone` | `⟦圖片已不存在於 <平台>⟧` / `⟦貼圖已不存在於 <平台>⟧` — the platform is read off the message's own id, so a Telegram photo says Telegram |
+| Not media at all (`video` / `audio` / `file`) | absent | `⟦影片⟧` / `⟦語音⟧` / `⟦檔案⟧` |
 
 The `gone` row is the point of the whole table. A message the platform deleted has to say
 so: rendering nothing would be indistinguishable from the plugin being broken, which is
 the failure shape this project keeps rediscovering.
+
+### Why white square brackets (F65)
+
+`⟦` and `⟧` are U+27E6 / U+27E7. They are here for one reason: **no keyboard layout
+produces them**, so a text message can no longer be mistaken for something the system said.
+
+Before this, the two were the same characters. A message whose body read `[sticker:?/?]`
+was pixel-identical to the placeholder drawn for a sticker nobody could resolve, and
+telling them apart meant querying `content_type` in sqlite. That is not hypothetical: F59
+was filed as a media-pipeline bug and kept for three days on exactly that confusion, and
+five hypotheses were tested before the answer turned out to be "a text message that looks
+like a placeholder".
+
+**What this does not do.** Someone who deliberately pastes `⟦sticker:1/2⟧` still collides.
+That is accepted and is not worth defending against — the brackets remove *accidental*
+collisions, which were the whole cost. A user who forges a placeholder on purpose is not
+the failure this is for.
+
+**The status line placeholders keep plain `[…]` on purpose.** The five strings from
+`attachmentUnavailableText()` (`[附件已不存在於 <平台>]`, `[附件無法解密]`,
+`[這個型別無法取得]`, `[附件取得逾時，可再試一次]`, `[附件取得失敗]`) are shown by
+`attachment.lua` as a transient line under the cursor, not as a line in the message panel.
+Nothing anyone typed can ever appear in that position, so there is nothing there to be
+mistaken for. The brackets mark "the system is speaking" in the one place where the user
+also speaks; that place is the panel, and only the panel.
 
 `pending` is not an error either. One page resolves its images with at most 4 requests in
 flight against a single 3s budget for the whole page; anything still outstanding when the
@@ -197,7 +227,7 @@ now in place, but no observed sample has ever hit it. "A daemon restart necessar
 the budget" was assumed when F57 was filed and did not survive measurement.
 
 ⚠️ This paragraph used to end "…and fills in on the next redraw", which was wishful: nothing
-ever triggered one. A cold page stayed on `[圖片載入中…]` indefinitely and the only thing that
+ever triggered one. A cold page stayed on `⟦圖片載入中…⟧` indefinitely and the only thing that
 helped was scrolling away and back (second render, local cache). Waiting — the one thing a
 user naturally does — was the one thing that could not work. The push is what makes the
 sentence true.

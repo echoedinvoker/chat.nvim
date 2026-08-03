@@ -39,7 +39,7 @@ describe("toMessage passes change state through to Lua", () => {
       "telegram:-100123",
     );
 
-    expect(m.text).toBe("[訊息已收回]");
+    expect(m.text).toBe("⟦訊息已收回⟧");
     expect(m.retracted_at).toBe(1_700_000_200_000);
   });
 
@@ -49,7 +49,7 @@ describe("toMessage passes change state through to Lua", () => {
       "telegram:-100123",
     );
 
-    expect(m.text).toBe("[訊息已收回]");
+    expect(m.text).toBe("⟦訊息已收回⟧");
   });
 
   test("a message edited and then retracted keeps both stamps", () => {
@@ -58,7 +58,7 @@ describe("toMessage passes change state through to Lua", () => {
       "telegram:-100123",
     );
 
-    expect(m.text).toBe("[訊息已收回]");
+    expect(m.text).toBe("⟦訊息已收回⟧");
     expect(m.edited_at).toBe(1_700_000_400_000);
     expect(m.retracted_at).toBe(1_700_000_500_000);
   });
@@ -155,14 +155,14 @@ describe("toMessage — 媒體三態（F35）", () => {
       unavailable: "gone",
     });
     expect(m.media).toEqual({ state: "gone" });
-    expect(m.text).toBe("[圖片已不存在於 Telegram]");
+    expect(m.text).toBe("⟦圖片已不存在於 Telegram⟧");
   });
 
   test("貼圖用貼圖的說法", () => {
     const m = toMessage(raw({ content: { type: "sticker", sticker_id: "1" } }), "telegram:-100123", {
       unavailable: "gone",
     });
-    expect(m.text).toBe("[貼圖已不存在於 Telegram]");
+    expect(m.text).toBe("⟦貼圖已不存在於 Telegram⟧");
   });
 
   test("gone wording names the message's own platform", () => {
@@ -179,7 +179,7 @@ describe("toMessage — 媒體三態（F35）", () => {
       "line:u1",
       { unavailable: "gone" },
     );
-    expect(line.text).toBe("[圖片已不存在於 LINE]");
+    expect(line.text).toBe("⟦圖片已不存在於 LINE⟧");
   });
 
   test("gone wording for stickers is platform-aware too", () => {
@@ -188,7 +188,7 @@ describe("toMessage — 媒體三態（F35）", () => {
       "telegram:-100123",
       { unavailable: "gone" },
     );
-    expect(tg.text).toBe("[貼圖已不存在於 Telegram]");
+    expect(tg.text).toBe("⟦貼圖已不存在於 Telegram⟧");
   });
 
   test("an unknown platform is named as-is rather than mislabelled", () => {
@@ -197,13 +197,13 @@ describe("toMessage — 媒體三態（F35）", () => {
       "slack:C123",
       { unavailable: "gone" },
     );
-    expect(m.text).toBe("[圖片已不存在於 slack]");
+    expect(m.text).toBe("⟦圖片已不存在於 slack⟧");
   });
 
   test("還沒回來時是載入中，不是壞了", () => {
     const m = toMessage(raw({ content: { type: "image" } }), "telegram:-100123", undefined);
     expect(m.media).toEqual({ state: "pending" });
-    expect(m.text).toBe("[圖片載入中…]");
+    expect(m.text).toBe("⟦圖片載入中…⟧");
   });
 
   test("收回優先於媒體", () => {
@@ -212,7 +212,7 @@ describe("toMessage — 媒體三態（F35）", () => {
       "telegram:-100123",
       { path: "/c/x.jpg", mime: "image/jpeg" },
     );
-    expect(m.text).toBe("[訊息已收回]");
+    expect(m.text).toBe("⟦訊息已收回⟧");
     expect(m.media).toBeUndefined();
   });
 });
@@ -229,22 +229,22 @@ const mediaRow = (over: Partial<McpMessageRaw> = {}) =>
 describe("toMessage shows a media message's caption (F44)", () => {
   test("a ready image shows its caption", () => {
     const m = toMessage(mediaRow(), "telegram:-100A", { path: "/c/x.jpg", mime: "image/jpeg" });
-    expect(m.text).toBe("[image] F40 S3 已編輯的 caption");
+    expect(m.text).toBe("⟦image⟧ F40 S3 已編輯的 caption");
   });
 
   test("a pending image shows its caption too", () => {
     const m = toMessage(mediaRow(), "telegram:-100A", undefined);
-    expect(m.text).toBe("[圖片載入中…] F40 S3 已編輯的 caption");
+    expect(m.text).toBe("⟦圖片載入中…⟧ F40 S3 已編輯的 caption");
   });
 
   test("a gone image shows its caption too", () => {
     const m = toMessage(mediaRow(), "telegram:-100A", { unavailable: "gone" });
-    expect(m.text).toBe("[圖片已不存在於 Telegram] F40 S3 已編輯的 caption");
+    expect(m.text).toBe("⟦圖片已不存在於 Telegram⟧ F40 S3 已編輯的 caption");
   });
 
   test("a retracted media message says only that it was retracted", () => {
     const m = toMessage(mediaRow({ retracted_at: 123 }), "telegram:-100A", undefined);
-    expect(m.text).toBe("[訊息已收回]");
+    expect(m.text).toBe("⟦訊息已收回⟧");
   });
 
   test("an empty caption adds nothing", () => {
@@ -253,7 +253,7 @@ describe("toMessage shows a media message's caption (F44)", () => {
       "telegram:-100A",
       { path: "/c/x.jpg", mime: "image/jpeg" },
     );
-    expect(m.text).toBe("[image]");
+    expect(m.text).toBe("⟦image⟧");
   });
 
   test("a text message is untouched", () => {
@@ -303,16 +303,16 @@ describe("toMessage renders non-image attachments", () => {
     raw({ content: { type, ...(text ? { text } : {}) } as any });
 
   test.each([
-    ["video", "[影片]"],
-    ["audio", "[語音]"],
-    ["file", "[檔案]"],
+    ["video", "⟦影片⟧"],
+    ["audio", "⟦語音⟧"],
+    ["file", "⟦檔案⟧"],
   ])("renders %s as %s", (type, expected) => {
     expect(toMessage(attachment(type), "telegram:-100123").text).toBe(expected);
   });
 
   test("an attachment caption is part of what was said", () => {
     const msg = toMessage(attachment("video", "看這個"), "telegram:-100123");
-    expect(msg.text).toBe("[影片] 看這個");
+    expect(msg.text).toBe("⟦影片⟧ 看這個");
   });
 
   test("an attachment must not claim image media state", () => {

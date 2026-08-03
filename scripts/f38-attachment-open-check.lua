@@ -85,7 +85,7 @@ state.reset()
 messages.open(CHAT)
 state.update_messages(CHAT, {
   -- Newest first, as the API returns them; state reverses to chronological.
-  { id = "telegram:2", sender_name = "Bob", text = "[影片]", timestamp = 1690000001000, content_type = "video" },
+  { id = "telegram:2", sender_name = "Bob", text = "⟦影片⟧", timestamp = 1690000001000, content_type = "video" },
   { id = "telegram:1", sender_name = "Bob", text = "hello",  timestamp = 1690000000000, content_type = "text" },
 })
 messages.render_full(CHAT)

@@ -1,3 +1,6 @@
 node_modules/
 *.lock
 .DS_Store
+
+# acceptance screenshots: local evidence, never published (contains real chat content)
+.acceptance/

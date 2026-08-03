@@ -122,23 +122,23 @@ local CHAT = "line:cIMG"
 local page1 = {
   msg(1, 1000, {
     content_type = "sticker",
-    text = "[sticker:5145/7432559]",
+    text = "⟦sticker:5145/7432559⟧",
     media = { state = "ready", path = "/cache/line/sticker/7432559.png" },
   }),
   msg(2, 2000, {
     content_type = "image",
-    text = "[圖片載入中…]",
+    text = "⟦圖片載入中…⟧",
     media = { state = "pending" },
   }),
   msg(3, 3000, {
     content_type = "image",
-    text = "[圖片已不存在於 LINE]",
+    text = "⟦圖片已不存在於 LINE⟧",
     media = { state = "gone" },
   }),
-  msg(4, 4000, { content_type = "video", text = "[video]" }),
+  msg(4, 4000, { content_type = "video", text = "⟦video⟧" }),
   msg(5, 5000, {
     content_type = "image",
-    text = "[image]",
+    text = "⟦image⟧",
     media = { state = "ready", path = "/cache/line/msg/624795090909135379.jpg" },
   }),
 }
@@ -196,9 +196,9 @@ check(8, "gone is not drawn", nil, drawn["line:m3"])
 check(9, "video is not drawn", nil, drawn["line:m4"])
 
 -- The wording is the sidecar's, and Lua must be printing it verbatim.
-check_true(10, "pending says it is loading", buf_has(bufnr, "[圖片載入中…]"))
-check_true(11, "gone says LINE deleted it, not nothing", buf_has(bufnr, "[圖片已不存在於 LINE]"))
-check_true(12, "video keeps its existing label", buf_has(bufnr, "[video]"))
+check_true(10, "pending says it is loading", buf_has(bufnr, "⟦圖片載入中…⟧"))
+check_true(11, "gone says LINE deleted it, not nothing", buf_has(bufnr, "⟦圖片已不存在於 LINE⟧"))
+check_true(12, "video keeps its existing label", buf_has(bufnr, "⟦video⟧"))
 
 --------------------------------------------------------------------------------
 -- Group B: R9 — prepending a page must move images exactly as far as text

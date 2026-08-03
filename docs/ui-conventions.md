@@ -50,8 +50,8 @@ message text here
 another message
 ```
 
-- Stickers: `[sticker:pkg/id]`
-- Images: `[image]`
+- Stickers: `⟦sticker:pkg/id⟧`
+- Images: `⟦image⟧`
 - `is_self` messages use sender name "Me"
 - Messages sorted chronologically (oldest first). API returns newest-first — reverse on initial load.
 
@@ -110,7 +110,7 @@ pcall(vim.api.nvim_win_set_cursor, win, cursor)
 
 **Appending lines cannot draw a picture (F66).** `image.plan` / `image.apply` have exactly
 one call site, inside `render_full`. For as long as the at-bottom branch appended lines of
-its own, every pushed image landed as `[sticker:…]` or `[image]` text with nothing under
+its own, every pushed image landed as `⟦sticker:…⟧` or `⟦image⟧` text with nothing under
 it — nine out of nine media messages across two samples, `media.state` already `ready` and
 the file already on disk. It was filed as a sidecar bug for three days, because the symptom
 is identical to media that never resolved.
@@ -273,7 +273,8 @@ not about the platform — the same rule `[` follows. Saying "that message does 
 would be inventing a fact about a server nobody asked.
 
 **Why this wording lives in Lua when placeholders live in the sidecar.** The sidecar owns
-text that describes *a message* (`[圖片載入中…]`, `[附件已不存在於 Telegram]`) — it is the
+text that describes *a message* (`⟦圖片載入中…⟧`, `[附件已不存在於 Telegram]` — the brackets
+differ on purpose, see F65 in `sidecar-protocol.md`) — it is the
 only place that knows the message's state, so a second copy in Lua could only drift. The
 panel's progress text describes *a loop the sidecar is not part of*: how many pages this
 client has walked, and whether it gave up. Nothing on the other side of the socket knows
@@ -287,8 +288,8 @@ two-character words) hands back the whole `content_text`, unmarked and possibly 
 
 ## Attachments that are not images
 
-`video` / `audio` / `file` render as their sidecar-given label (`[影片]` / `[語音]` /
-`[檔案]`) and are opened on demand with `o`, which fetches the bytes and hands the cached
+`video` / `audio` / `file` render as their sidecar-given label (`⟦影片⟧` / `⟦語音⟧` /
+`⟦檔案⟧`) and are opened on demand with `o`, which fetches the bytes and hands the cached
 path to `vim.ui.open`. They deliberately do **not** go through `image.plan`: `image.lua`
 is for things that belong on screen, and handing a video's bytes to image.nvim is not a
 degraded experience, it is a broken one.
@@ -373,7 +374,7 @@ of the text below it.
 | Event | Channel | Details |
 |-------|---------|---------|
 | New message in **current** chat | Buffer append | Handled by messages.lua append flow |
-| Edit / retraction in **current** chat | Buffer redraw | `render_full` with the cursor preserved; retracted text renders as italic `_[訊息已收回]_` so it reads as absence rather than as something the sender typed |
+| Edit / retraction in **current** chat | Buffer redraw | `render_full` with the cursor preserved; retracted text renders as italic `_⟦訊息已收回⟧_` so it reads as absence rather than as something the sender typed. The italics are Lua's; the wording arrives from the sidecar (F65) |
 | New message in **other** chat | Chat list update + statusline badge | Update `[●]` marker, increment badge count |
 | Connection status change | Statusline | `[daemon offline]` / `[reconnecting]` / `[disconnected]` (connected shows unreads or nothing) |
 | Delivery mode change | Statusline + persistent notice | `[polling]` plus a notice naming how far behind messages can now be. Only while the connection is healthy — see "Statusline component" (F63) |

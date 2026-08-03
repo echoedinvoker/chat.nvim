@@ -359,7 +359,7 @@ describe("SubscriptionManager", () => {
   });
 
   // R15: toMessage without a third argument lands image/sticker on `pending`, i.e. the
-  // text becomes "[圖片載入中…]". Telegram can edit a photo's caption, so an already
+  // text becomes "⟦圖片載入中…⟧". Telegram can edit a photo's caption, so an already
   // rendered picture would turn into a loading placeholder that never resolves — the
   // initial-load path resolves media, the tail path has to as well.
   function imageEv(cursor: string, chatId: string, id: string) {
@@ -531,7 +531,7 @@ describe("SubscriptionManager", () => {
     const pushed = (notifications.find((n) => n.method === "resource_updated")!
       .params.messages as any[])[0];
 
-    expect(pushed.text).not.toBe("[圖片載入中…]");
+    expect(pushed.text).not.toBe("⟦圖片載入中…⟧");
     expect(pushed.media).toEqual({ state: "ready", path: "/tmp/cached/img-1.png" });
     expect(pushed.content_type).toBe("image");
     // Only image/sticker rows are handed over, not the whole batch
@@ -581,7 +581,7 @@ describe("SubscriptionManager", () => {
 
     const pushed = (notifications.find((n) => n.method === "resource_updated")!
       .params.messages as any[])[0];
-    expect(pushed.text).toBe("[訊息已收回]");
+    expect(pushed.text).toBe("⟦訊息已收回⟧");
     expect(pushed.media).toBeUndefined();
   });
 
@@ -621,7 +621,7 @@ describe("SubscriptionManager", () => {
     expect(push.params.uri).toBe("chat://chats/telegram:AAA/messages");
     const pushed = (push.params.messages as any[])[0];
     expect(pushed.id).toBe("telegram:1");
-    expect(pushed.text).toBe("[訊息已收回]");
+    expect(pushed.text).toBe("⟦訊息已收回⟧");
   });
 
   test("has_more keeps draining until the tail is caught up", async () => {

@@ -12,7 +12,7 @@ local function check(name, ok)
 end
 
 local base = {
-  id = "telegram:1", chat_id = "c", sender_name = "a", text = "[image]",
+  id = "telegram:1", chat_id = "c", sender_name = "a", text = "⟦image⟧",
   timestamp = 1, edited_at = nil, retracted_at = nil, content_type = "image",
   media = { state = "pending" },
 }

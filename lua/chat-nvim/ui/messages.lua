@@ -40,7 +40,11 @@ local function format_messages(messages)
     local text = msg.text
     if msg.retracted_at and msg.retracted_at ~= vim.NIL then
       -- Italic so a withdrawn message reads as absence, not as something the sender typed.
-      text = "_[訊息已收回]_"
+      -- Only the italics are decided here. The wording arrives from the sidecar, which is
+      -- also where the brackets are chosen (F65): this line used to compose "[訊息已收回]"
+      -- itself, and the day the sidecar moved to ⟦訊息已收回⟧ the panel would have gone on
+      -- showing the old one — green tests, stale screen. Presentation is Lua's, words are not.
+      text = "_" .. text .. "_"
     end
     -- There is no `text == nil` branch here on purpose. The sidecar's `toMessage` sets
     -- `text` on every path, so a second placeholder format lived here only to drift from
@@ -91,10 +95,15 @@ local function scroll_to_bottom(win, bufnr, specs)
   for _, s in ipairs(specs) do
     pending[s.row] = s.height
   end
+  -- `written` is the same walk read the other way round: rows whose virt_lines already
+  -- exist, and how many. F67 needs that count, because topfill can only scroll into filler
+  -- that is actually there.
+  local written = {}   -- 0-based row -> rows of virt_lines already in the buffer
   for _, m in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, -1, 0, -1, { details = true })) do
     local row, det = m[2], m[4]
-    if det and det.virt_lines and #det.virt_lines > 0 and pending[row] then
-      pending[row] = nil
+    if det and det.virt_lines and #det.virt_lines > 0 then
+      written[row] = (written[row] or 0) + #det.virt_lines
+      if pending[row] then pending[row] = nil end
     end
   end
 
@@ -102,6 +111,9 @@ local function scroll_to_bottom(win, bufnr, specs)
   -- the bottom up so the loop is bounded by the window height, not by the buffer's length,
   -- and stopped at the first overflow: one line further up is one line off the bottom.
   local best = count
+  -- The position the search stopped at, and what it would have cost. Kept because the gap
+  -- under the last image is decided there, not at `best`: see the topfill block below.
+  local over_t, over_rows, over_extra = nil, nil, nil
   for t = count, 1, -1 do
     local ok, th = pcall(vim.api.nvim_win_text_height, win,
       { start_row = t - 1, end_row = count - 1 })
@@ -111,12 +123,54 @@ local function scroll_to_bottom(win, bufnr, specs)
       -- spec rows are 0-based, toplines are 1-based.
       if row + 1 >= t then extra = extra + h end
     end
-    if th.all + extra > win_h then break end
+    if th.all + extra > win_h then
+      over_t, over_rows, over_extra = t, th.all + extra, extra
+      break
+    end
     best = t
   end
 
+  -- F67: the band of empty rows under the last image. A topline moves one whole display
+  -- line at a time, so when the step up crosses a picture it costs all twelve of its rows
+  -- at once and overflows. The search stops one position short and the reader is left
+  -- looking at the gap. It depends only on what is above: text creeps up a row at a time
+  -- and lands flush, an image cannot.
+  --
+  -- `topfill` is that missing dimension. It says how many filler rows to show above the top
+  -- line, which lets the window open partway down a picture instead of above or below it.
+  --
+  -- Measured, not reasoned: scripts/f67-topfill-probe.lua on nvim 0.12.3. `builtin.txt`
+  -- documents topfill as diff filler and the expectation going in was that it would do
+  -- nothing here; with the topline on the line *after* an anchor, topfill=6 of a 12-row
+  -- block put VIRT-07 on the first screen row and survived a redraw. With the topline on
+  -- the anchor itself, redraw zeroed it — the block is then below the top line, so there is
+  -- no filler to point at.
+  --
+  -- The fill belongs at `over_t`, the position that overflowed, not at `best`. Those are
+  -- rarely the same line: a message renders as header / body / blank, so the picture's
+  -- anchor usually sits two lines above `best`, with the blank in between — and a real line
+  -- between the filler and the top line means topfill has nothing adjacent to fill.
+  --
+  -- Arithmetic. nvim_win_text_height counts a below-line block in full for a range starting
+  -- at the line after its anchor, so showing `f` of those rows displays
+  -- `over_rows - block + f`. Setting that equal to the window gives f directly. Worked
+  -- example from scenario H of f58-viewport-check: 22 - 28 + 12 = 6.
+  local topfill = 0
+  if over_t and over_t >= 2 and over_extra == 0 then
+    local anchor = over_t - 2 -- 0-based row of line `over_t - 1`
+    -- A pending spec's virt_lines do not exist yet. Filler aimed at rows that have not been
+    -- written is dropped on the next redraw, quietly, leaving the gap it claimed to close.
+    local block = (pending[anchor] == nil) and (written[anchor] or 0) or 0
+    if block > 0 then
+      local f = win_h - over_rows + block
+      if f >= 0 and f <= block then
+        best, topfill = over_t, f
+      end
+    end
+  end
+
   vim.api.nvim_win_call(win, function()
-    vim.fn.winrestview({ topline = best, lnum = count, col = 0 })
+    vim.fn.winrestview({ topline = best, topfill = topfill, lnum = count, col = 0 })
   end)
 end
 

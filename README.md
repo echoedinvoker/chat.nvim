@@ -140,7 +140,7 @@ chatmux daemon → adapter → LINE / Telegram
 Messages arrive by push: the sidecar subscribes to the daemon's MCP resources and streams
 updates back to Lua, which appends to the buffer without stealing your cursor. Messages that
 change after the fact travel the same path — edit one from your phone and the text updates in
-place; retract it and it renders as `[訊息已收回]`. See
+place; retract it and it renders as `⟦訊息已收回⟧`. See
 [`docs/architecture.md`](docs/architecture.md) and
 [`docs/sidecar-protocol.md`](docs/sidecar-protocol.md) for this side of the boundary, and chatmux's
 [MCP interface](https://github.com/echoedinvoker/chatmux/blob/main/docs/mcp-interface.md) (the
@@ -151,7 +151,7 @@ tools and resources this plugin consumes) or
 ## Limitations
 
 - **Images and stickers render inline; other media opens externally.** Video, audio and files
-  show as `[影片]` / `[語音]` / `[檔案]`; `o` on one fetches it and hands it to your desktop's
+  show as `⟦影片⟧` / `⟦語音⟧` / `⟦檔案⟧`; `o` on one fetches it and hands it to your desktop's
   default application. A terminal is a poor player for any of the three, so it does not try to be.
 - **Opening a Telegram attachment takes 15-40 seconds.** The bytes are refetched from the platform
   rather than kept locally, so the first `o` on any attachment has a real wait. The second is
@@ -170,7 +170,7 @@ tools and resources this plugin consumes) or
   through the current pipeline: core does not expose the raw event, `messages` has no `file_name`
   column, and the `attachments` table is unused. This is a data gap, not a display choice.
 - **Telegram voice messages are indistinguishable from files.** The adapter classifies them as
-  documents, so they show as `[檔案]` and have no voice-specific UI.
+  documents, so they show as `⟦檔案⟧` and have no voice-specific UI.
 - **Search covers the current chat only.** No cross-chat search; `/` is still native vim search
   over what is loaded.
 - **Animated stickers show their static frame.** Enough to recognise which sticker it is, which is

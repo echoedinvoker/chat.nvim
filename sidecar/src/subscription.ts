@@ -525,7 +525,7 @@ export class SubscriptionManager {
    */
   private async pushEvents(events: ChatmuxEvent[]): Promise<void> {
     // R15: without this, an edited photo arrives with no media and toMessage renders
-    // "[圖片載入中…]" — a placeholder that never resolves, because the next push carries
+    // "⟦圖片載入中…⟧" — a placeholder that never resolves, because the next push carries
     // no media either. Retracted rows are skipped: core has already cleared the content,
     // and toMessage gives them no media state, so a lookup would be wasted.
     const mediaRows = events
@@ -552,7 +552,7 @@ export class SubscriptionManager {
       // F57: the third argument is what readMessages has had since F43 and this path did
       // not. A page's media shares one deadline, so whatever has not resolved when it
       // expires is simply absent from the snapshot — toMessage reads that as `pending` and
-      // Lua prints "[圖片載入中…]" with nothing behind it to ever change its mind. On the
+      // Lua prints "⟦圖片載入中…⟧" with nothing behind it to ever change its mind. On the
       // resource path a straggler pushes its own redraw; here it stayed pending forever.
       // The reconnect path makes that the common case rather than an edge one: after a
       // daemon restart the whole batch is a cold cache.

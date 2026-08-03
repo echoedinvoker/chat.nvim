@@ -98,7 +98,7 @@ M.norm = norm
 --- Has this message changed in a way the buffer must show?
 ---
 --- F43: media is compared explicitly. Before this, a photo going pending → ready was noticed
---- only because the placeholder text happened to change with it ("[圖片載入中…]" → "[image]")
+--- only because the placeholder text happened to change with it ("⟦圖片載入中…⟧" → "⟦image⟧")
 --- — the state layer never looked at media at all. That coincidence is not something to
 --- build a redraw on, and F44 weakened it further by appending captions to both wordings.
 local function media_of(m)
