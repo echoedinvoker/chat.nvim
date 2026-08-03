@@ -97,6 +97,51 @@ failures. If a test ever earns a place on this list, it goes here by name, with 
 looks like and why it is allowed — never as a blanket exemption. An empty list is the
 maintained state, not an oversight.
 
+The integration file no longer relies on a reader to decide which kind of red it has. It
+probes the daemon at module load; unreachable prints the socket path and the command that
+starts it, then skips, so a skip and a pass are told apart in the output and a red means the
+send is actually broken. The probe is deliberately not in `beforeAll`: when that hook throws,
+bun reports one unnamed failure and every test name in the file disappears — counted as
+neither passed nor failed. Skips are counted individually, which is the difference that
+matters.
+
+### Calling a red an environment problem
+
+**Whenever a red is attributed to the environment, the same note must answer: if this red is
+real, what is broken?** Unable to write that sentence means unable to make the attribution
+yet.
+
+This is a rule rather than a reminder because the reminder was already there and did not
+work. Twice — 2026-08-02 and 2026-08-03 — the one test that verifies a real send end to end
+went red and was filed as an environment problem. What it was reporting was that this editor
+could not send messages at all. That was found days later, in ordinary use, by a person
+watching the screen say `Sent` while nothing arrived.
+
+Two corollaries, both paid for:
+
+- **A clean-worktree re-run rules out a regression, not a defect.** It answers "did this round
+  cause it", and answering that well says nothing about whether the thing was ever working.
+  The 2026-08-02 attribution used a good method on the wrong question.
+- **A restart that makes the red disappear is not a diagnosis.** The send kill switch latches:
+  once tripped it refuses every send until the daemon restarts. Under that failure shape,
+  every re-run across a restart comes back green regardless of what caused the original red —
+  so "it passes now" and "it was the environment" produce identical evidence. The distinction
+  only exists inside one daemon lifetime, by reading the value the send actually returned.
+
+### Reading a test run
+
+**Absent from the output is not the same as passed.** Two ways a run misleads, both observed:
+
+- When `beforeAll` throws, bun reports one unnamed failure and names none of the tests
+  underneath. They are not in the pass count either. Reading "185 pass / 1 fail" as "one test
+  is broken" assumes those numbers cover every test, and after a hook failure they do not.
+- Log lines belong to whichever file printed them. `FailedToOpenSocket` appears a dozen times
+  in a healthy run — it is deliberate mock behavior in the reconnect and subscription tests.
+  Taking it as the reason a different file went red is how the 2026-08-03 attribution was
+  made.
+
+Before citing a number from a test run, check which tests it covers.
+
 Note that a green suite is not the same as a verified change. Three of the checks under
 [Lua verification](#lua-verification) exist because a mechanical assertion passed while the
 screen was wrong: `virt_lines_above` on line 0 creates a valid extmark that Neovim never

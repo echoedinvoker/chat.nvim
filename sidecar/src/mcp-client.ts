@@ -13,7 +13,7 @@ import type {
   MediaResult,
 } from "./types.ts";
 
-const DEFAULT_SOCKET = `${process.env.HOME}/.local/share/chatmux/chatmux.sock`;
+export const DEFAULT_SOCKET = `${process.env.HOME}/.local/share/chatmux/chatmux.sock`;
 
 export class McpClient {
   private socketPath: string;

@@ -1,17 +1,44 @@
-import { describe, test, expect, beforeAll } from "bun:test";
-import { McpClient } from "../src/mcp-client.ts";
+import { describe, test, expect } from "bun:test";
+import { McpClient, DEFAULT_SOCKET } from "../src/mcp-client.ts";
 import { waitFor } from "./support/wait-for.ts";
 
-describe("integration: real chatmux daemon", () => {
-  let client: McpClient;
+// This file needs a live daemon, and that used to be an unwritten rule: the tests simply went
+// red when it was absent, and a reader had to decide which kind of red it was. Twice that
+// decision went the wrong way (F61, F69) and absorbed a real defect — sending was broken and
+// the only test that would have said so was already being read as an environment problem.
+//
+// So the dependency is checked here instead, and it is checked by reaching the daemon rather
+// than by reading a flag: a flag records what someone remembered to set, reachability is a
+// fact. Unreachable prints its reason and skips; reachable means these tests must run and
+// any red is real.
+//
+// The probe is at module load, not in beforeAll, for a measured reason: when beforeAll throws,
+// bun 1.3.9 reports one unnamed failure and no test in the file is named at all — not passed,
+// not individually failed, just gone. That is the same shape as the defect this round is
+// about, an output that hides what happened. `describe.skipIf` also needs a plain boolean,
+// which a top-level await can produce and an async hook cannot.
+let client: McpClient | null = null;
+let unreachable: string | null = null;
+try {
+  // Kept and reused rather than closed: the client is stateless HTTP over a unix socket, so
+  // there is no open connection to leak — and connecting twice would only mean two sessions.
+  client = new McpClient();
+  await client.connect();
+} catch (err) {
+  unreachable = err instanceof Error ? err.message : String(err);
+  client = null;
+  // Named socket and the way back: a bare fetch error here reads "Was there a typo in the url
+  // or port?", which describes nothing a reader of this file can act on.
+  const socket = process.env.CHATMUX_SOCKET ?? DEFAULT_SOCKET;
+  console.log(
+    `skipped: chatmux daemon unreachable at ${socket} (${unreachable}) — ` +
+    `start it with \`systemctl --user start chatmux\` to run these`,
+  );
+}
 
-  beforeAll(async () => {
-    client = new McpClient();
-    await client.connect();
-  });
-
+describe.skipIf(unreachable !== null)("integration: real chatmux daemon", () => {
   test("list_chats returns non-empty", async () => {
-    const { chats } = await client.listChats();
+    const { chats } = await client!.listChats();
     expect(chats.length).toBeGreaterThan(0);
     expect(chats[0]).toHaveProperty("id");
     expect(chats[0]).toHaveProperty("name");
@@ -23,7 +50,7 @@ describe("integration: real chatmux daemon", () => {
   const TEST_CHAT_ID = process.env.CHATMUX_TEST_CHAT_ID ?? "telegram:7869659098";
 
   test("send_message and verify delivery via read_messages", async () => {
-    const { chats } = await client.listChats();
+    const { chats } = await client!.listChats();
     expect(chats.length).toBeGreaterThan(0);
 
     const chat = chats.find((c) => c.id === TEST_CHAT_ID);
@@ -33,7 +60,7 @@ describe("integration: real chatmux daemon", () => {
     ).toBeDefined();
 
     const marker = `integration-test-${Date.now()}`;
-    const sendResult = await client.sendMessage({
+    const sendResult = await client!.sendMessage({
       chat_id: chat!.id,
       text: marker,
     });
@@ -51,7 +78,7 @@ describe("integration: real chatmux daemon", () => {
     // expectation: the message still has to come back.
     const found = await waitFor(
       async () => {
-        const { messages } = await client.readMessages({ chat_id: chat!.id, limit: 5 });
+        const { messages } = await client!.readMessages({ chat_id: chat!.id, limit: 5 });
         return messages.find((m) => m.text === marker);
       },
       {
