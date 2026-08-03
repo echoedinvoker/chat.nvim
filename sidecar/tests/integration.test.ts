@@ -38,6 +38,10 @@ describe("integration: real chatmux daemon", () => {
       text: marker,
     });
 
+    // Since F70 this is true by construction — sendMessage throws on a failed send, so a red
+    // here now arrives as the throw, carrying core's own reason instead of just `false`. The
+    // assertion stays anyway: delete it and this test loses its only direct statement that
+    // the send is supposed to succeed, which is the gate itself, not a restatement of a type.
     expect(sendResult.success).toBe(true);
 
     // A real Telegram round trip has no predictable upper bound — least of all just after

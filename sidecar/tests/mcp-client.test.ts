@@ -215,3 +215,43 @@ describe("McpClient event tail", () => {
     expect("error" in res).toBe(true);
   });
 });
+
+describe("sendMessage surfaces core's failures as throws", () => {
+  // core answers over MCP's content[0].text; parseToolContent reads the JSON from there.
+  function clientAnswering(payload: unknown): McpClient {
+    const client = new McpClient("/nonexistent.sock");
+    (client as any).callTool = async () => ({
+      result: { content: [{ type: "text", text: JSON.stringify(payload) }] },
+    });
+    return client;
+  }
+
+  test("a failed send throws with core's detail", async () => {
+    const client = clientAnswering({
+      success: false,
+      error: "adapter_unavailable",
+      detail: "telegram adapter is not connected",
+    });
+
+    await expect(
+      client.sendMessage({ chat_id: "telegram:1", text: "hi" }),
+    ).rejects.toThrow("telegram adapter is not connected");
+  });
+
+  test("a failed send with no detail still throws", async () => {
+    const client = clientAnswering({ success: false });
+
+    await expect(
+      client.sendMessage({ chat_id: "telegram:1", text: "hi" }),
+    ).rejects.toThrow();
+  });
+
+  test("a successful send resolves and carries the message id", async () => {
+    const client = clientAnswering({ success: true, message_id: "42", timestamp: 1 });
+
+    const result = await client.sendMessage({ chat_id: "telegram:1", text: "hi" });
+
+    expect(result.success).toBe(true);
+    expect(result.message_id).toBe("42");
+  });
+});

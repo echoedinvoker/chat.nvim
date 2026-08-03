@@ -219,15 +219,28 @@ export class McpClient {
     return this.parseToolContent(raw) as ReadEventsResponse;
   }
 
+  /**
+   * Core hands a failed send back as *data* (`{success:false}`, tools.ts:406/458) and never
+   * throws. This turns that into a throw, and the reason is not style: on the Lua side both
+   * call sites — `ui/composer.lua` and `init.lua:_chat_send` — read only `err`, so a
+   * `success:false` travelling home as a resolved value renders as "Sent". A third call site
+   * added later would inherit that same blindness by default. Putting the single decision
+   * point here means every caller, present and future, gets it for free (F70 defect A).
+   */
   async sendMessage(params: {
     chat_id: string;
     text: string;
-  }): Promise<{ success: boolean; error?: string }> {
+  }): Promise<{ success: true; message_id?: string }> {
     const raw = await this.callTool("send_message", params);
     const parsed = this.parseToolContent(raw) as McpSendResult;
+    if (!parsed.success) {
+      throw new Error(
+        parsed.detail ?? parsed.error ?? "send failed for an unstated reason"
+      );
+    }
     return {
-      success: parsed.success,
-      ...(parsed.error && { error: parsed.detail ?? parsed.error }),
+      success: true,
+      ...(parsed.message_id && { message_id: parsed.message_id }),
     };
   }
 
